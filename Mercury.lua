@@ -5421,6 +5421,13 @@ conn=ch.Event:Connect(function(tag,fid,ox,oy,w,h,r,dir,ex,g,cardScale,pos,n,mat,
      local edge=min(min(x,W-1-x),min(y,H-1-y));if edge<22 then alpha*=edge/22 end
      -- inside the window the window itself shows: the liquid starts at its edge
      if pv>0 then local inside=sdRR(ox+x+.5,oy+y+.5,0,0,w,h,r);if inside<.5 then alpha*=clamp(inside+.5,0,1) end end
+     -- on the card side the card's own outline bounds the liquid: blobs never bulge past it
+     local px=ox+x+.5
+     if dir*(px-ex)>g.gap+.5 then
+      local mid=ex+dir*(g.gap+g.cw/2)
+      local sc=sdRR(px,oy+y+.5,mid-g.cw/2,g.cy-g.ch/2,mid+g.cw/2,g.cy+g.ch/2,g.rad)
+      if sc>-.5 then alpha*=clamp(.5-sc,0,1) end
+     end
      -- where only the window's own shape reaches (its border), the window's rim shows
      local own=v-pv;if pv>.02 and own<.14 then alpha*=clamp(own/.14,0,1) end
      if maskMode then
@@ -5506,7 +5513,7 @@ ch:Fire('ready')
   live.rimImage=AS:CreateEditableImage({Size=Vector2.new(w,h)})
   live.rimImage:WritePixelsBuffer(Vector2.zero,Vector2.new(w,h),rimBuf)
   if not live.rimLabel then
-   live.rimLabel=create('ImageLabel',{Name='ToastMorphRim',BackgroundTransparency=1,ImageColor3=Theme.mist,ZIndex=1,Visible=false,Parent=panel})
+   live.rimLabel=create('ImageLabel',{Name='ToastMorphRim',BackgroundTransparency=1,ImageColor3=Theme.mist,ZIndex=9,Visible=false,Parent=panel})
    passThrough(live.rimLabel)
    track(function() if live and live.rimImage then live.rimImage:Destroy() end end)
   end
@@ -5606,7 +5613,7 @@ ch:Fire('ready')
    Resize.themeHooks=Resize.themeHooks or {};table.insert(Resize.themeHooks,sendRim)
    task.delay(.5,sendRim,Theme)
    image=AS:CreateEditableImage({Size=Vector2.new(W_,H_)})
-   label=create('ImageLabel',{Name='ToastMorph',BackgroundTransparency=1,Size=UDim2.fromOffset(W_/k,H_/k),ImageContent=Content.fromObject(image),ZIndex=1,Visible=false,Parent=panel})
+   label=create('ImageLabel',{Name='ToastMorph',BackgroundTransparency=1,Size=UDim2.fromOffset(W_/k,H_/k),ImageContent=Content.fromObject(image),ZIndex=9,Visible=false,Parent=panel})
    passThrough(label)
    track(function() if image then image:Destroy() end end)
   end)
