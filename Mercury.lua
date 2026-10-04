@@ -4860,26 +4860,27 @@ do
   end}
 end
 
--- Notification morph: a blob buds out of the panel edge, fills and widens into
--- the card while the neck between them thins; at ~80% full the neck snaps and
--- pulls back into the panel, the card wobbles into its final size, and the real
--- notification fades in over it (text included). Closing plays it in reverse.
+-- Notification morph: the card is FILLED by simulated liquid (particle fluid,
+-- double-density relaxation). It squeezes out of the panel edge, a jet rushes
+-- across the card, slams the far wall, sloshes back and floods it; the neck then
+-- snaps back into the panel and the surface settles into the clean card, which
+-- stays as the notification's body while the text is shown. Closing drains the
+-- liquid back into the panel through a wide neck. Each particle is drawn as a
+-- small blob through the shared liquid renderer, which merges them into one
+-- smooth surface with the panel's marble and rim light.
 local toastMorph=nil
 do
  local WW,WH=296,148
  local surface,label=nil,nil
  local m=nil
- -- bud, rush across, slosh/bounce off the far wall; total = time to settle
- local BUD,RUSH,SLOSH,RETRACT=.2,.3,.78,.14
- local TOTAL=BUD+RUSH+SLOSH
- local SNAP=BUD+RUSH+.12   -- the neck snaps just after the head hits the far wall
+ -- fluid parameters (px, frames at 60 fps; 2 substeps per frame)
+ local FL={h=15,rho0=3,k=.75,kn=2.5,sig=.2,beta=.1,maxV=10,count=260,rush=7,blob=4.6}
  local function ensure()
   if surface then return end
   surface=newSurface(WW,WH)
   label=create('ImageLabel',{Name='ToastMorph',BackgroundTransparency=1,Size=UDim2.fromOffset(WW/k,WH/k),ImageContent=Content.fromObject(surface.image),ZIndex=1,Visible=false,Parent=panel})
   passThrough(label)
  end
- local function smooth(a) a=clamp(a,0,1);return a*a*(3-2*a) end
  local function rrect(cx,cy,ww,hh,rad,list)
   rad=min(rad,ww/2,hh/2)
   local hw,hh2=ww/2-rad,hh/2-rad
@@ -4905,104 +4906,191 @@ do
    end
   end
  end
- -- s = distance outward from the panel edge, mapped to X by side (dir)
- local function draw(tau,opening,w,h,r)
-  local dir=m.onRight and 1 or -1
+ local function sdRound(x,y,x0,y0,x1,y1,r)
+  local qx=math.abs(x-(x0+x1)/2)-((x1-x0)/2-r);local qy=math.abs(y-(y0+y1)/2)-((y1-y0)/2-r)
+  local ox,oy=max(qx,0),max(qy,0)
+  return sqrt(ox*ox+oy*oy)+min(max(qx,qy),0)-r
+ end
+ -- geometry in (s, y): s = distance outward from the panel edge, y = panel px
+ local function geometry(h)
   local cw,ch=TOAST_SIZE.X*k,TOAST_SIZE.Y*k
-  local gap=Layout.gap*k
-  local ex=m.onRight and w or 0
-  local ey=h-ch/2
-  local function X(s) return ex+dir*s end
-  local ox=m.onRight and floor((ex-52)/S)*S or floor((ex-gap-cw-44)/S)*S
-  local oy=floor((ey-WH/2)/S)*S
-  local rad=18*k
-  local circles,poly={},nil
-  if tau<BUD then
-   -- bud: a bead pushes out of the panel edge toward where the card will be
-   local u=tau/BUD;local e=1-(1-u)^3
-   local br=4+10*e
-   circles[1]={X(-4+(gap+6)*e)-ox,ey-oy,br}
-  else
-   -- Surge: a thick, rounded wave-head rushes across the card (accelerating),
-   -- slams into the far wall, throws splash beads past the far corners, then
-   -- bounces back off the wall and surges in again a few times, each bounce
-   -- smaller, with small ripples running over the surface, until it settles.
-   local tr=tau-BUD
-   local inner,outer=gap,gap+cw
-   local ph=m.ph
-   local frontAt
-   if tr<RUSH then
-    local u=tr/RUSH
-    local F=(cw+10*k)*u^1.45
-    local spread=.5+.5*(1-(1-u)^2)
-    local head=.5-.25*u            -- how rounded (bulbous) the head is
-    frontAt=function(yn)
-     local edge=clamp((spread-math.abs(yn))/.2,0,1)
-     return (F*(1-head*yn*yn)+1.8*k*sin(5*pi*yn+ph[1]+tau*16))*math.sqrt(edge)
-    end
-   else
-    local ts=tr-RUSH
-    -- damped bounce: the head springs back off the far wall and surges in again
-    local back=cw*.34*math.exp(-3.4*ts)*(1-cos(13*ts))/2
-    local ripple=2.6*k*math.exp(-2.4*ts)
-    frontAt=function(yn)
-     return cw+12*k-back*(1+.35*yn*yn)+ripple*(sin(4.2*pi*yn+ph[1]-ts*15)+.6*sin(7*pi*yn+ph[2]+ts*21))
-    end
-    -- splash: beads thrown past the far top/bottom corners on impact, pulled back in
-    if ts<.42 and opening then
-     local life=sin(pi*ts/.42)
-     for _,side in ipairs({-1,1}) do
-      circles[#circles+1]={X(outer-8*k-6*k*life)-ox,ey+side*(ch/2+4*k*life)-oy,(3+2.5*life)*k*life}
+  return {gap=Layout.gap*k,cw=cw,ch=ch,cy=h-ch/2,rad=18*k}
+ end
+ local function newSim(g)
+  local sim={g=g,xs={},ys={},vx={},vy={},px={},py={},t=0,injected=0,neckOpen=true,neckH=11,mode='fill',snapAt=-1,suck=false,absorb=false}
+  return sim
+ end
+ local function sdAllowed(sim,x,y)
+  local g=sim.g
+  local d=sdRound(x,y,g.gap,g.cy-g.ch/2,g.gap+g.cw,g.cy+g.ch/2,g.rad)
+  if sim.neckOpen then d=min(d,sdRound(x,y,-10,g.cy-sim.neckH,g.gap+12,g.cy+sim.neckH,min(9,sim.neckH))) end
+  return d
+ end
+ local function inject(sim,n,speed,spread)
+  for _=1,n do
+   local i=#sim.xs+1
+   sim.xs[i]=-4.5+rand(0,2.2);sim.ys[i]=sim.g.cy+rand(-1,1)*spread
+   sim.vx[i]=speed*rand(.9,1.1);sim.vy[i]=rand(-1,1)*speed*.08;sim.px[i]=0;sim.py[i]=0
+  end
+  sim.injected+=n
+ end
+ local function removeAt(sim,i)
+  local last=#sim.xs
+  for _,arr in ipairs({sim.xs,sim.ys,sim.vx,sim.vy,sim.px,sim.py}) do arr[i]=arr[last];arr[last]=nil end
+ end
+ local function buildGrid(xs,ys,h)
+  local grid={}
+  for i=1,#xs do local key=floor(xs[i]/h)+floor(ys[i]/h)*4096;local c=grid[key];if not c then c={};grid[key]=c end;c[#c+1]=i end
+  return grid
+ end
+ local function substep(sim,dt)
+  local xs,ys,vx,vy,px,py=sim.xs,sim.ys,sim.vx,sim.vy,sim.px,sim.py
+  local n=#xs;if n==0 then return end
+  local h=FL.h;local g=sim.g
+  local grid=buildGrid(xs,ys,h)
+  if sim.suck then
+   -- drain: flow back toward the panel along the card (no single-point pull, which
+   -- pinched the middle); only near the neck is it gently guided to centre
+   for i=1,n do vx[i]-=.5*dt;if xs[i]<g.gap+16 then vy[i]+=(g.cy-ys[i])*.025*dt end end
+  end
+  -- viscosity
+  for i=1,n do
+   local cx,cy=floor(xs[i]/h),floor(ys[i]/h)
+   for oy=-1,1 do for ox=-1,1 do
+    local cell=grid[cx+ox+(cy+oy)*4096]
+    if cell then for _,j in ipairs(cell) do if j>i then
+     local dx,dy=xs[j]-xs[i],ys[j]-ys[i];local r=sqrt(dx*dx+dy*dy)
+     if r>0 and r<h then
+      local q=r/h;local ux,uy=dx/r,dy/r;local u=(vx[i]-vx[j])*ux+(vy[i]-vy[j])*uy
+      if u>0 then local I=dt*(1-q)*(FL.sig*u+FL.beta*u*u)/2;vx[i]-=I*ux;vy[i]-=I*uy;vx[j]+=I*ux;vy[j]+=I*uy end
      end
-    end
-   end
-   local right,left={},{}
-   local N=28
-   for i=0,N do
-    local yn=-1+2*i/N
-    local y=ey+yn*ch/2
-    -- the card's own rounded outline on this row
-    local dyc=max(0,math.abs(y-ey)-(ch/2-rad))
-    local inset=rad-sqrt(max(0,rad*rad-dyc*dyc))
-    local a=inner+inset;local bmax=outer-inset
-    local bb=min(bmax,a+frontAt(yn))
-    if bb>a+.5 then right[#right+1]={X(bb)-ox,y-oy};left[#left+1]={X(a)-ox,y-oy} end
-   end
-   if #right>=2 then
-    poly={}
-    for _,pt in ipairs(right) do poly[#poly+1]=pt end
-    for i=#left,1,-1 do poly[#poly+1]=left[i] end
-   end
-   -- the bud bead melts into the incoming liquid
-   local fade=1-clamp(tr/(RUSH*.5),0,1)
-   if fade>0 then circles[#circles+1]={X(gap+6)-ox,ey-oy,14*fade} end
-   -- neck between the panel edge and the card
-   local ein=-4
-   local cin=gap+4
-   if tau<SNAP then
-    local ns=clamp((tau-BUD)/(SNAP-BUD),0,1);local nr=9-5*ns
-    for _,f in ipairs({.25,.5,.75}) do circles[#circles+1]={X(ein+(cin-ein)*f)-ox,ey-oy,nr*(1-.35*(1-math.abs(2*f-1)))} end
-   elseif tau<SNAP+RETRACT then
-    local q=smooth((tau-SNAP)/RETRACT)
-    for _,f in ipairs({.25,.5,.75}) do circles[#circles+1]={X(ein+(cin-ein)*f*(1-q))-ox,ey-oy,(4-1.75*(1-math.abs(2*f-1)))*(1-q)} end
+    end end end
+   end end
+  end
+  for i=1,n do
+   local s=sqrt(vx[i]*vx[i]+vy[i]*vy[i]);if s>FL.maxV then vx[i]*=FL.maxV/s;vy[i]*=FL.maxV/s end
+   px[i],py[i]=xs[i],ys[i];xs[i]+=vx[i]*dt;ys[i]+=vy[i]*dt
+  end
+  -- double density relaxation
+  grid=buildGrid(xs,ys,h)
+  local rho,rhoN=table.create(n,0),table.create(n,0)
+  local pairsI,pairsJ,pairsQ={},{},{}
+  for i=1,n do
+   local cx,cy=floor(xs[i]/h),floor(ys[i]/h)
+   for oy=-1,1 do for ox=-1,1 do
+    local cell=grid[cx+ox+(cy+oy)*4096]
+    if cell then for _,j in ipairs(cell) do if j>i then
+     local dx,dy=xs[j]-xs[i],ys[j]-ys[i];local r=sqrt(dx*dx+dy*dy)
+     if r<h then
+      local q=1-r/h;local q2=q*q;local q3=q2*q
+      rho[i]+=q2;rho[j]+=q2;rhoN[i]+=q3;rhoN[j]+=q3
+      if r>1e-6 then local c=#pairsI+1;pairsI[c]=i;pairsJ[c]=j;pairsQ[c]=q end
+     end
+    end end end
+   end end
+  end
+  local dt2=dt*dt
+  for c=1,#pairsI do
+   local i,j,q=pairsI[c],pairsJ[c],pairsQ[c]
+   local dx,dy=xs[j]-xs[i],ys[j]-ys[i];local r=sqrt(dx*dx+dy*dy)
+   if r>1e-6 then
+    local P=FL.k*((rho[i]+rho[j])/2-FL.rho0);local Pn=FL.kn*(rhoN[i]+rhoN[j])/2
+    local D=dt2*(P*q+Pn*q*q)/2
+    local ux,uy=dx/r*D,dy/r*D
+    xs[j]+=ux;ys[j]+=uy;xs[i]-=ux;ys[i]-=uy
    end
   end
-  -- panel outline, then the card as a second loop; the doubled bridge between
-  -- them cancels itself out under the even-odd fill
+  -- walls (the card, plus the neck while open); the panel takes liquid back
+  -- only after the snap or while draining
+  for i=n,1,-1 do
+   if xs[i]<-6 and (sim.absorb or not sim.neckOpen) then removeAt(sim,i) else
+    if xs[i]<-6 then xs[i]=-6 end
+    local d=sdAllowed(sim,xs[i],ys[i])+2
+    if d>0 then
+     local e=.5
+     local gx=sdAllowed(sim,xs[i]+e,ys[i])-sdAllowed(sim,xs[i]-e,ys[i])
+     local gy=sdAllowed(sim,xs[i],ys[i]+e)-sdAllowed(sim,xs[i],ys[i]-e)
+     local gl=sqrt(gx*gx+gy*gy);if gl<1e-6 then gl=1 end
+     xs[i]-=gx/gl*d;ys[i]-=gy/gl*d
+     px[i]+=(xs[i]-px[i])*.25   -- wall friction
+    end
+   end
+  end
+  for i=1,#xs do vx[i]=(xs[i]-px[i])/dt;vy[i]=(ys[i]-py[i])/dt end
+ end
+ local function simFrame(sim)
+  sim.t+=1/60
+  local g=sim.g
+  if sim.mode=='fill' then
+   if sim.t<.18 then if rand(0,1)<.6 then inject(sim,1,1.4,1.5) end
+   elseif sim.injected<FL.count then inject(sim,min(7,FL.count-sim.injected),FL.rush,4.2)
+   elseif sim.snapAt<0 then sim.snapAt=sim.t+.12 end
+   if sim.snapAt>0 and sim.t>=sim.snapAt and sim.neckOpen then
+    sim.neckOpen=false
+    for i=1,#sim.xs do if sim.xs[i]<g.gap+2 then sim.vx[i]=-3.3 end end
+   end
+   if not sim.neckOpen then for i=1,#sim.xs do if sim.xs[i]<g.gap-.5 then sim.vx[i]=min(sim.vx[i],-2.8) end end end
+  end
+  substep(sim,.5);substep(sim,.5)
+ end
+ -- a full card's worth of liquid at rest (hex packing), for the drain
+ local function fullSim(g)
+  local sim=newSim(g)
+  local d=6.6;local row=0
+  local y=g.cy-g.ch/2+3.3
+  while y<g.cy+g.ch/2-2 do
+   local x=g.gap+3.3+(row%2)*d/2
+   while x<g.gap+g.cw-2 do
+    if sdRound(x,y,g.gap,g.cy-g.ch/2,g.gap+g.cw,g.cy+g.ch/2,g.rad)<-2.5 then
+     local i=#sim.xs+1;sim.xs[i]=x;sim.ys[i]=y;sim.vx[i]=0;sim.vy[i]=0;sim.px[i]=x;sim.py[i]=y
+    end
+    x+=d
+   end
+   y+=d*.866;row+=1
+  end
+  sim.injected=FL.count;sim.mode='drain';sim.neckOpen=true;sim.neckH=g.ch*.32;sim.suck=true;sim.absorb=true
+  return sim
+ end
+ -- render: panel outline + the card polygon (while settling/held) + one blob per particle
+ local function draw(w,h,r,sim,cardScale)
+  local g=m.g;local dir=m.onRight and 1 or -1
+  local ex=m.onRight and w or 0
+  local function X(s) return ex+dir*s end
+  local ox=m.onRight and floor((ex-52)/S)*S or floor((ex-g.gap-g.cw-44)/S)*S
+  local oy=floor((g.cy-WH/2)/S)*S
   local per=perimeter(w,h,r);local pts={}
   for i=1,120 do local x,y=outlineAt((i-1)/120*per,w,h,r);pts[i]={x-ox,y-oy} end
-  if poly then pts[#pts+1]=pts[1];for _,pt in ipairs(poly) do pts[#pts+1]=pt end;pts[#pts+1]=poly[1] end
-  local bodies={};for _,c in ipairs(circles) do if c[3]>.6 then bodies[#bodies+1]=c end end
+  if cardScale and cardScale>0 then
+   local poly={};rrect(X(g.gap+g.cw/2)-ox,g.cy-oy,g.cw*cardScale,g.ch*cardScale,g.rad*cardScale,poly)
+   pts[#pts+1]=pts[1];for _,pt in ipairs(poly) do pts[#pts+1]=pt end;pts[#pts+1]=poly[1]
+  end
+  local bodies={}
+  if sim then for i=1,#sim.xs do bodies[i]={X(sim.xs[i])-ox,sim.ys[i]-oy,FL.blob} end end
   use(surface);clearRow=nil;postProcess=fadeBorders
   material.compose=function() return shared.material.sheetAt(-ox,-oy) end
   render(pts,bodies,nil)
   postProcess=nil
   label.Position=UDim2.fromOffset(ox/k,oy/k);label.Visible=true
  end
- local fadeToken=0
+ local function stepFor(sim)
+  -- fixed 60 Hz steps from real time, at most 2 per run so it never stalls
+  local due=floor((clock-m.simClock)*60)
+  if due>2 then m.simClock=clock-2/60;due=2 end
+  for _=1,due do simFrame(sim);m.simClock+=1/60 end
+ end
  toastMorph={
-  open=function(onRight,onDone) ensure();fadeToken+=1;label.ImageTransparency=0;m={opening=true,start=clock,onRight=onRight,onDone=onDone,ph={rand(0,2*pi),rand(0,2*pi)}} end,
-  close=function(onRight,onDone) ensure();fadeToken+=1;label.ImageTransparency=0;local old=m;m={opening=false,start=clock+.18,onRight=onRight,onDone=onDone,ph=old and old.ph or {rand(0,2*pi),rand(0,2*pi)}} end,
+  open=function(onRight,onDone)
+   ensure();label.ImageTransparency=0
+   local h=panelPixels().Y
+   local g=geometry(h)
+   m={opening=true,onRight=onRight,onDone=onDone,g=g,sim=newSim(g),simClock=clock}
+  end,
+  close=function(onRight,onDone)
+   ensure();label.ImageTransparency=0
+   local h=panelPixels().Y
+   local g=geometry(h)
+   m={opening=false,onRight=onRight,onDone=onDone,g=g,start=clock+.18}
+  end,
  }
  jobs[#jobs+1]={name='toast',interval=0,elapsed=0,
   active=function() return m~=nil and root.Visible end,
@@ -5013,25 +5101,32 @@ do
   run=function()
    if not m then return end
    local size=panelPixels();local w,h=size.X,size.Y;local r=contourRadius()
-   local el=clock-m.start
    if m.opening then
     if m.hold then
-     if clock-(m.drawn or 0)>=.05 then m.drawn=clock;draw(TOTAL,true,w,h,r) end
+     if clock-(m.drawn or 0)>=.05 then m.drawn=clock;draw(w,h,r,nil,1) end
      return
     end
-    local tau=min(el,TOTAL)
-    draw(tau,true,w,h,r)
-    if el>=TOTAL then
-     m.hold=true;m.drawn=clock
+    local sim=m.sim
+    stepFor(sim)
+    -- settle once the slosh has died down: the clean card grows in under the liquid
+    if not sim.neckOpen and sim.t>sim.snapAt+.8 and not m.settleAt then m.settleAt=clock end
+    local settle=m.settleAt and clamp((clock-m.settleAt)/.3,0,1) or 0
+    if settle>=1 then
+     draw(w,h,r,nil,1)
+     m.hold=true;m.drawn=clock;m.sim=nil
      local cb=m.onDone;m.onDone=nil
      if cb then cb() end
+    else
+     draw(w,h,r,sim,settle>0 and (.9+.1*settle) or nil)
     end
    else
-    local tau=min(BUD+RUSH,BUD+RUSH-el*1.15)
-    if tau<=0 then
+    if clock<m.start then draw(w,h,r,nil,1) return end
+    if not m.sim then m.sim=fullSim(m.g);m.simClock=clock end
+    stepFor(m.sim)
+    if #m.sim.xs==0 then
      local cb=m.onDone;m=nil;label.Visible=false
      if cb then cb() end
-    else draw(tau,false,w,h,r) end
+    else draw(w,h,r,m.sim,nil) end
    end
   end}
 end
