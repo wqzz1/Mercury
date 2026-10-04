@@ -1,4 +1,12 @@
 local toastToken = 0
+-- With the liquid morph the rendered card IS the notification's body, so the
+-- toast frame only carries the text; its own background is for the fallback.
+local function setToastChrome(on: boolean)
+    for _, child in toast:GetChildren() do
+        if child:IsA("UIStroke") then child.Enabled = on
+        elseif child:IsA("GuiObject") and not child:IsA("TextLabel") then child.Visible = on end
+    end
+end
 local function showToast(title: string, content: string?, duration: number?)
     toastToken += 1
     local token = toastToken
@@ -18,6 +26,7 @@ local function showToast(title: string, content: string?, duration: number?)
     if morph and Layout.performance ~= "Low" and not Resize.minimized then
         playFade(toastFade, false, 0)
         toast.Visible = false
+        setToastChrome(false)
         toast.Position = UDim2.new(finalX, y)
         morph.open(onRight, function()
             if token ~= toastToken or not toast.Parent then return end
@@ -34,6 +43,7 @@ local function showToast(title: string, content: string?, duration: number?)
         return
     end
 
+    setToastChrome(true)
     toast.Visible = true
     toast.Position = UDim2.new(startX, y)
     playFade(toastFade, true, 0.25)

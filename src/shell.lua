@@ -650,7 +650,7 @@ if lavaAsset then
     })
     corner(toastMarble, 18)
 end
-specularRim(toast, 1.5, 0.08)
+specularRim(toast, 1, 0.5)
 liquidWave(toast, TOAST_SIZE.X, TOAST_SIZE.Y, 18, 10)
 for _, layer in toast:GetChildren() do
     if layer.Name == "LiquidWater" then

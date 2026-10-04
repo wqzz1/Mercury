@@ -2950,21 +2950,23 @@ do
   active=function() return m~=nil and root.Visible end,
   reset=function()
    -- interrupted (panel hidden/minimized): finish immediately
-   if m then local cb=m.onDone;m=nil;if label then label.Visible=false end;if cb then cb() end end
+   if m then local cb=m.onDone;local held=m.hold;m=nil;if label then label.Visible=false end;if held then toast.Visible=false end;if cb then cb() end end
   end,
   run=function()
    if not m then return end
    local size=panelPixels();local w,h=size.X,size.Y;local r=contourRadius()
    local el=clock-m.start
    if m.opening then
+    if m.hold then
+     if clock-(m.drawn or 0)>=.05 then m.drawn=clock;draw(BUD+FILL+WOBBLE,true,w,h,r) end
+     return
+    end
     local tau=min(el,BUD+FILL+WOBBLE)
     draw(tau,true,w,h,r)
     if el>=BUD+FILL+WOBBLE then
-     local cb=m.onDone;m=nil
+     m.hold=true;m.drawn=clock
+     local cb=m.onDone;m.onDone=nil
      if cb then cb() end
-     fadeToken+=1;local token=fadeToken
-     tween(label,.25,{ImageTransparency=1})
-     task.delay(.27,function() if token==fadeToken and label then label.Visible=false end end)
     end
    else
     local tau=min(BUD+FILL,BUD+FILL-el*1.15)

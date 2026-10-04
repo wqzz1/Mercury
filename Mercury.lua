@@ -1550,7 +1550,7 @@ if lavaAsset then
     })
     corner(toastMarble, 18)
 end
-specularRim(toast, 1.5, 0.08)
+specularRim(toast, 1, 0.5)
 liquidWave(toast, TOAST_SIZE.X, TOAST_SIZE.Y, 18, 10)
 for _, layer in toast:GetChildren() do
     if layer.Name == "LiquidWater" then
@@ -4758,21 +4758,23 @@ do
   active=function() return m~=nil and root.Visible end,
   reset=function()
    -- interrupted (panel hidden/minimized): finish immediately
-   if m then local cb=m.onDone;m=nil;if label then label.Visible=false end;if cb then cb() end end
+   if m then local cb=m.onDone;local held=m.hold;m=nil;if label then label.Visible=false end;if held then toast.Visible=false end;if cb then cb() end end
   end,
   run=function()
    if not m then return end
    local size=panelPixels();local w,h=size.X,size.Y;local r=contourRadius()
    local el=clock-m.start
    if m.opening then
+    if m.hold then
+     if clock-(m.drawn or 0)>=.05 then m.drawn=clock;draw(BUD+FILL+WOBBLE,true,w,h,r) end
+     return
+    end
     local tau=min(el,BUD+FILL+WOBBLE)
     draw(tau,true,w,h,r)
     if el>=BUD+FILL+WOBBLE then
-     local cb=m.onDone;m=nil
+     m.hold=true;m.drawn=clock
+     local cb=m.onDone;m.onDone=nil
      if cb then cb() end
-     fadeToken+=1;local token=fadeToken
-     tween(label,.25,{ImageTransparency=1})
-     task.delay(.27,function() if token==fadeToken and label then label.Visible=false end end)
     end
    else
     local tau=min(BUD+FILL,BUD+FILL-el*1.15)
@@ -5196,6 +5198,14 @@ end
 
 -- source: lifecycle.lua
 local toastToken = 0
+-- With the liquid morph the rendered card IS the notification's body, so the
+-- toast frame only carries the text; its own background is for the fallback.
+local function setToastChrome(on: boolean)
+    for _, child in toast:GetChildren() do
+        if child:IsA("UIStroke") then child.Enabled = on
+        elseif child:IsA("GuiObject") and not child:IsA("TextLabel") then child.Visible = on end
+    end
+end
 local function showToast(title: string, content: string?, duration: number?)
     toastToken += 1
     local token = toastToken
@@ -5215,6 +5225,7 @@ local function showToast(title: string, content: string?, duration: number?)
     if morph and Layout.performance ~= "Low" and not Resize.minimized then
         playFade(toastFade, false, 0)
         toast.Visible = false
+        setToastChrome(false)
         toast.Position = UDim2.new(finalX, y)
         morph.open(onRight, function()
             if token ~= toastToken or not toast.Parent then return end
@@ -5231,6 +5242,7 @@ local function showToast(title: string, content: string?, duration: number?)
         return
     end
 
+    setToastChrome(true)
     toast.Visible = true
     toast.Position = UDim2.new(startX, y)
     playFade(toastFade, true, 0.25)
