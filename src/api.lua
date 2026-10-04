@@ -33,9 +33,9 @@ local function controlBase(kind, frame, default, callback, flag)
         table.insert(listeners, listener)
         return self
     end
-    function object:_emit(value)
-        safeCall(callback, value)
-        for _, listener in listeners do safeCall(listener, value) end
+    function object:_emit(value, ...)
+        safeCall(callback, value, ...)
+        for _, listener in listeners do safeCall(listener, value, ...) end
     end
     function object:SetVisible(visible)
         self.Visible = visible == true
@@ -294,7 +294,7 @@ local function addKeybind(container, config)
 end
 local function addColorPicker(container, config)
     assert(typeof(config) == "table", "ColorPicker needs an options table")
-    local headerHeight, openHeight = Layout.buttonHeight, 360
+    local headerHeight, openHeight = Layout.buttonHeight, 405
     local frame = row(container, config.Name or "ColorPicker", headerHeight)
     local button, label = glassButton(frame, config.Name or "ColorPicker", config.Name or "ColorPicker", 0, headerHeight)
     label.TextXAlignment = Enum.TextXAlignment.Left
@@ -315,10 +315,10 @@ local function addColorPicker(container, config)
     local fields = create("Frame", {Name = "PickerFields", BackgroundColor3 = Theme.tint,
         BackgroundTransparency = 0.08, BorderSizePixel = 0,
         AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, headerHeight + 8),
-        Size = UDim2.new(1, -Layout.padX * 2, 0, 310),
+        Size = UDim2.new(1, -Layout.padX * 2, 0, 355),
         Visible = false, ZIndex = 3, Parent = frame})
     corner(fields, 12); specularRim(fields)
-    create("UISizeConstraint", {MaxSize = Vector2.new(270, 310), Parent = fields})
+    create("UISizeConstraint", {MaxSize = Vector2.new(270, 355), Parent = fields})
     local content = create("Frame", {BackgroundTransparency = 1,
         Position = UDim2.fromOffset(12, 6), Size = UDim2.new(1, -24, 1, -12),
         ZIndex = 3, Parent = fields})
@@ -373,10 +373,18 @@ local function addColorPicker(container, config)
     }), Parent = hueBar})
     local brightBar, brightHit, brightKnob = track("BRIGHTNESS", 219)
     local brightGradient = create("UIGradient", {Parent = brightBar})
-    caption("HEX", 267)
+    local transparencyBar, transparencyHit, transparencyKnob = track("TRANSPARENCY", 264)
+    create("UIGradient", {Transparency = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1),
+    }), Parent = transparencyBar})
+    local transparencyValue = create("TextLabel", {Name = "TransparencyValue", BackgroundTransparency = 1,
+        Position = UDim2.fromOffset(0, 264), Size = UDim2.new(1, 0, 0, 13),
+        FontFace = font(Enum.FontWeight.SemiBold), TextSize = 10, TextColor3 = Theme.mistDim,
+        TextXAlignment = Enum.TextXAlignment.Right, ZIndex = 4, Parent = content})
+    caption("HEX", 312)
     local hexHolder = create("Frame", {Name = "HexField", BackgroundColor3 = Theme.tint,
         BackgroundTransparency = 0.35, BorderSizePixel = 0,
-        Position = UDim2.fromOffset(38, 260), Size = UDim2.new(1, -38, 0, 38),
+        Position = UDim2.fromOffset(38, 305), Size = UDim2.new(1, -38, 0, 38),
         ZIndex = 4, Parent = content})
     corner(hexHolder, UDim.new(0.5, 0)); specularRim(hexHolder, 1, 0.5)
     create("TextLabel", {BackgroundTransparency = 1, Position = UDim2.fromOffset(12, 0),
@@ -389,6 +397,9 @@ local function addColorPicker(container, config)
         TextXAlignment = Enum.TextXAlignment.Left, ClearTextOnFocus = false,
         ZIndex = 5, Parent = hexHolder})
     local obj = controlBase("ColorPicker", frame, swatch.BackgroundColor3, config.Callback, config.Flag)
+    local initialTransparency = config.CurrentTransparency or config.Transparency or 0
+    assert(typeof(initialTransparency) == "number", "ColorPicker transparency must be a number")
+    obj.Transparency = math.clamp(initialTransparency, 0, 1)
     local hue, saturation, shadeValue = obj.Value:ToHSV()
     local brightness = 0
     local editingHex = false
@@ -411,12 +422,16 @@ local function addColorPicker(container, config)
         shadeKnob.Position = UDim2.fromScale(saturation, 1 - shadeValue)
         hueKnob.Position = UDim2.fromScale(hue, 0.5)
         brightKnob.Position = UDim2.fromScale((brightness + 1) / 2, 0.5)
+        transparencyKnob.Position = UDim2.fromScale(obj.Transparency, 0.5)
+        transparencyBar.BackgroundColor3 = color
+        transparencyValue.Text = string.format("%d%%", math.round(obj.Transparency * 100))
         brightGradient.Color = ColorSequence.new({
             ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)),
             ColorSequenceKeypoint.new(0.5, base),
             ColorSequenceKeypoint.new(1, Color3.new(0, 0, 0)),
         })
         swatch.BackgroundColor3 = color
+        swatch.BackgroundTransparency = obj.Transparency
         hexValue.Text = hexOf(color)
         if not editingHex then hexBox.Text = string.sub(hexValue.Text, 2) end
     end
@@ -425,7 +440,7 @@ local function addColorPicker(container, config)
         if color == obj.Value then render(); return end
         obj.Value = color
         render()
-        obj:_emit(color)
+        obj:_emit(color, obj.Transparency)
     end
     function obj:Set(value, silent)
         assert(typeof(value) == "Color3", "ColorPicker:Set expects Color3")
@@ -435,7 +450,16 @@ local function addColorPicker(container, config)
         local changed = self.Value ~= value
         self.Value = value
         render()
-        if changed and not silent then self:_emit(value) end
+        if changed and not silent then self:_emit(value, self.Transparency) end
+        return self
+    end
+    function obj:SetTransparency(transparency, silent)
+        assert(typeof(transparency) == "number", "ColorPicker:SetTransparency expects a number")
+        transparency = math.clamp(transparency, 0, 1)
+        if transparency == self.Transparency then return self end
+        self.Transparency = transparency
+        render()
+        if not silent then self:_emit(self.Value, transparency) end
         return self
     end
     obj:Set(obj.Value, true)
@@ -447,8 +471,9 @@ local function addColorPicker(container, config)
             saturation = math.clamp((pointer.X - pos.X) / math.max(1, size.X), 0, 1)
             shadeValue = 1 - math.clamp((pointer.Y - pos.Y) / math.max(1, size.Y), 0, 1)
         else
-            local bar = if kind == "hue" then hueBar else brightBar
+            local bar = if kind == "hue" then hueBar else if kind == "brightness" then brightBar else transparencyBar
             local fraction = math.clamp((pointer.X - bar.AbsolutePosition.X) / math.max(1, bar.AbsoluteSize.X), 0, 1)
+            if kind == "transparency" then obj:SetTransparency(fraction); return end
             if kind == "hue" then hue = fraction else
                 brightness = fraction * 2 - 1
                 if math.abs(brightness) < 0.04 then brightness = 0 end
@@ -456,7 +481,7 @@ local function addColorPicker(container, config)
         end
         updateColor()
     end
-    for _, part in {{shadeHit, "shade"}, {hueHit, "hue"}, {brightHit, "brightness"}} do
+    for _, part in {{shadeHit, "shade"}, {hueHit, "hue"}, {brightHit, "brightness"}, {transparencyHit, "transparency"}} do
         obj:Bind(part[1].InputBegan:Connect(function(input)
             if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
                 dragging = part[2]

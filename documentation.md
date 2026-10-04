@@ -250,15 +250,17 @@ Click the keybind control, then press a key to rebind it. `Callback` reports a b
 local color = main:CreateColorPicker({
     Name = "Tint",
     CurrentValue = Color3.fromRGB(255, 255, 255),
-    Callback = function(value)
-        -- value is a Color3
+    CurrentTransparency = 0.25,
+    Callback = function(value, transparency)
+        -- value is a Color3; transparency is a number from 0 to 1
     end,
 })
 
 color:Set(Color3.fromRGB(160, 120, 240))
+color:SetTransparency(0.5)
 ```
 
-Click the control to expand the picker. Drag in the shade square to set saturation and value, use **HUE** to choose a color, and use **BRIGHTNESS** to blend it toward white or black. The header shows the current hex color. Enter a six-digit hex value in the **HEX** field (or a three-digit shorthand and leave the field). `Callback` and `Set` use `Color3` values.
+Click the control to expand the picker. Drag in the shade square to set saturation and value, use **HUE** to choose a color, **BRIGHTNESS** to blend it toward white or black, and **TRANSPARENCY** to choose a value from 0 (opaque) to 1 (invisible). The header shows the current hex color. Enter a six-digit hex value in the **HEX** field (or a three-digit shorthand and leave the field). `Set` changes the `Color3` without changing transparency. Read `color.Transparency` or call `color:SetTransparency(value)`. `Callback` and `OnChanged` receive the `Color3` and transparency whenever either value changes.
 
 ### Labels, paragraphs, and dividers
 
