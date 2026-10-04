@@ -1841,7 +1841,8 @@ function api.start(minimized,instant)
  flow.shotTime=started+lead;flow.lead=lead;flow.resetElapsed=true;flow.panelAlpha=nil;flow.iconAlpha=nil;flow.hideIn=nil;flow.revealed=false;flow.handoff=nil
  local function reveal()
   flow.firstLatency=flow.firstLatency*.5+min(.08,os.clock()-started)*.5
-  showSurface();canvas.Visible=true;flow.revealed=true
+   showSurface();canvas.Visible=true;flow.revealed=true
+   flow.holdRedrawAt=os.clock()+1/12
    flow.shotTime=os.clock();flow.lead=0;flow.resetElapsed=true
   -- The backdrop (or bubble body) stays two more frames, until the liquid's first
   -- upload is certainly on screen; hiding it in the same frame showed one empty frame.
@@ -1998,15 +1999,20 @@ track(RunService.RenderStepped:Connect(function(dt)
    elseif coroutine.status(sheetTask)=='dead' and material.sheetTask==sheetTask then material.sheetTask=nil end
   end
   if state~='bubble' then runSheet(.0015) end
-  -- Hold the first panel picture while its contents fade out; do not keep
-  -- rebuilding the same full-size liquid frame during this waiting stage.
+   -- Hold the first panel shape while its contents fade out, but refresh its
+   -- marble at the sheet rate so the liquid does not freeze before the morph.
    local waitingForContent=state=='morph' and morph and
     ((morph.dir==1 and os.clock()-flow.clickTime<CONTENT_FADE_SECONDS)
      or (morph.dir==-1 and (not flow.revealed or flow.hideIn)))
   if waitingForContent then elapsed=0 end
   -- finish the update in flight before starting the next one
-  if pacing.task then resumeRender()
-   -- Keep the idle liquid border in step with the per-frame icon gradient.
+   if pacing.task then resumeRender()
+   elseif waitingForContent and flow.revealed and morph.dir==1 and os.clock()>=flow.holdRedrawAt then
+    flow.holdRedrawAt=os.clock()+1/12
+    flow.shotTime=os.clock()
+    step(0,true)
+    if pacing.task then resumeRender() end
+    -- Keep the idle liquid border in step with the per-frame icon gradient.
    elseif not waitingForContent and not flow.handoff and ((state=='bubble' and elapsed>=PERF.bubbleGap) or elapsed>=1/60) then
    -- draw for when this picture will be on screen, not for now
    local lead=state=='morph' and min(.06,flow.latency) or 0
@@ -2619,7 +2625,7 @@ do
    local clear=not (x>w-60 and y>h-60)
    for _,d in ipairs(drops) do local gap=math.abs((d.arc-arc+L/2)%L-L/2);if gap<140 then clear=false end end
    if clear then
-    drops[#drops+1]={slot=slot(),start=clock,bud=rand(.7,1.1),float=rand(1.4,3.6),back=rand(1.6,2.6),arc=arc,out=rand(.7,1.15)*REF_R,r=rand(10,13),speed=rand(.25,.7)*REF_R*(rand(0,1)<.5 and -1 or 1),bob=rand(.6,1.4),phase=rand(0,2*pi),split=rand(0,1)<.4,splitSpin=rand(2.5,4.5)}
+    drops[#drops+1]={slot=slot(),start=clock,bud=rand(.7,1.1),float=rand(1.4,3.6),back=rand(1.6,2.6),arc=arc,out=rand(.7,1.15)*REF_R,r=rand(8.5,13),speed=rand(.25,.7)*REF_R*(rand(0,1)<.5 and -1 or 1),bob=rand(.6,1.4),phase=rand(0,2*pi),split=rand(0,1)<.4,splitSpin=rand(2.5,4.5)}
     return
    end
   end
