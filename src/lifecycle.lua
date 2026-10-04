@@ -12,6 +12,28 @@ local function showToast(title: string, content: string?, duration: number?)
     local startX = UDim.new(finalX.Scale, finalX.Offset + (if onRight then -14 else 14))
     local y = UDim.new(1, -TOAST_SIZE.Y)
 
+    -- Liquid morph: the card grows out of the panel edge as a blob, then the real
+    -- notification fades in over it; on the way out it melts back into the panel.
+    local morph = Resize.liquidToast
+    if morph and Layout.performance ~= "Low" and not Resize.minimized then
+        playFade(toastFade, false, 0)
+        toast.Visible = false
+        toast.Position = UDim2.new(finalX, y)
+        morph.open(onRight, function()
+            if token ~= toastToken or not toast.Parent then return end
+            toast.Visible = true
+            playFade(toastFade, true, 0.25)
+            task.delay(duration or 2.4, function()
+                if token ~= toastToken or not toast.Parent then return end
+                playFade(toastFade, false, 0.2)
+                morph.close(onRight, function()
+                    if token == toastToken and toast.Parent then toast.Visible = false end
+                end)
+            end)
+        end)
+        return
+    end
+
     toast.Visible = true
     toast.Position = UDim2.new(startX, y)
     playFade(toastFade, true, 0.25)

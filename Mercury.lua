@@ -4430,6 +4430,7 @@ do
   -- stretching neck, lets go, falls under gravity behind the controls, and on
   -- reaching the bottom edge becomes an edge droplet that keeps its impact speed.
   local drip,nextDrip=nil,nil
+  local falling,doubled={},false   -- drops in the air; first drip at launch is always followed by a second
   local DRIP_G=1150   -- px/s^2
  local nextSpawn=1.5
  local outline,outlineKey={},nil
@@ -4446,6 +4447,7 @@ do
   for _,d in ipairs(drops) do d.slot.label.Visible=false;pool[#pool+1]=d.slot end
   table.clear(drops)
    if drip then drip.slot.label.Visible=false;pool[#pool+1]=drip.slot;drip=nil end
+   for _,f in ipairs(falling) do f.slot.label.Visible=false;pool[#pool+1]=f.slot end;table.clear(falling)
  end
  local grip=panel:FindFirstChild('ResizeGrip')
  local function spawn(w,h,r,L)
@@ -4532,6 +4534,30 @@ do
   local p=tb.AbsolutePosition-panel.AbsolutePosition;local s=tb.AbsoluteSize
   local lo,hi=p.X+s.Y/2+8,min(p.X+s.X-s.Y/2-8,w-r-70)
   local ey=p.Y+s.Y
+  -- drops in the air (more than one can be falling at once)
+  for i=#falling,1,-1 do
+   local f=falling[i];local R=f.R;local item=f.slot
+   local tau=clock-f.t0
+   local x=f.x;local y=f.y1+f.v0*tau+.5*DRIP_G*tau*tau;local v=f.v0+DRIP_G*tau
+   if y+R>=h-3 then
+    -- landing: becomes an edge droplet on the bottom edge, carrying its momentum
+    local sw,sh,q=w-2*r,h-2*r,pi*r/2
+    drops[#drops+1]={slot=item,start=clock,bud=1,float=rand(1.2,2.2),back=rand(1.6,2.4),arc=sw/2+q+sh+q+(w-r-x),out=rand(.75,1)*REF_R,r=R,speed=rand(.12,.3)*REF_R*(rand(0,1)<.5 and -1 or 1),bob=rand(.6,1.2),phase=0,split=false,splitSpin=3,impact={off=y-h,v=v*.22}}
+    table.remove(falling,i)
+   else
+    -- a small trailing bead stretches the drop into a teardrop as it speeds up
+    local tail=min(v*.014,R*1.2)
+    local ox,oy=floor((x-WINDOW/2)/S)*S,floor((y-WINDOW/2)/S)*S
+    local bodies={{x-ox,y-oy,R},{x-ox,y-tail-oy,R*.55}}
+    use(item.surface);clearRow=nil
+    postProcess=function() tintCircles(bodies,DRIP_TINT) end
+    material.compose=function() return shared.material.sheetAt(-ox,-oy) end
+    render({},bodies,nil)
+    postProcess=nil
+    item.label.Position=UDim2.fromOffset(ox/k,oy/k);item.label.Visible=true
+   end
+  end
+  -- the drip gathering under the bar (one at a time)
   if not drip then
    if not nextDrip then nextDrip=clock+rand(3,6) end
    if clock<nextDrip or hi<=lo then return end
@@ -4540,55 +4566,40 @@ do
   end
   local item=drip.slot;local R=drip.R
   local t=clock-drip.start
-  if t<drip.F+drip.Sd then
-   -- hanging: grow under the edge, then sag on a thinning neck until it pinches off
-   local x=lo+(hi-lo)*drip.fx
-   local bodies={};local cy,rr
-   if t<drip.F then
-    local u=t/drip.F;local e=1-(1-u)^3
-    rr=R*(.3+.7*e)*(1+.05*sin(t*6));cy=ey+rr*.55+3*e
-    -- liquid gathering: two side beads slide in along the underside and merge
-    local gap=drip.spread*(1-e);local sr=R*(.55-.25*e)
-    if gap>1 then bodies[#bodies+1]={x-gap,ey+sr*.35,sr};bodies[#bodies+1]={x+gap,ey+sr*.35,sr} end
-   else
-    local u=(t-drip.F)/drip.Sd
-    rr=R*(1-.06*u);cy=ey+R*.55+3+26*u*u
-    for i=1,3 do local f=i/4;local nr=R*(.6-.48*u)*(1-.25*f);if nr>.8 then bodies[#bodies+1]={x,ey+(cy-ey)*f*.9,nr} end end
-   end
-   bodies[#bodies+1]={x,cy,rr}
-   drip.x,drip.y1=x,cy
-   local ox,oy=floor((x-WINDOW/2)/S)*S,floor((ey-64)/S)*S
-   -- the tab bar's underside as the parent body; only rows below it are drawn
-   local band={{x-70-ox,ey-30-oy},{x+70-ox,ey-30-oy},{x+70-ox,ey-oy},{x-70-ox,ey-oy}}
-   local local_={};for j,b in ipairs(bodies) do local_[j]={b[1]-ox,b[2]-oy,b[3]} end
-   use(item.surface);clearRow=nil
-   local top=floor((ey-oy)/S)+1
-   local clipBytes=min(OH,top*S+2)*OW*4
-   postProcess=function() fill(pixels,0,0,clipBytes);tintCircles(local_,DRIP_TINT) end
-   material.compose=function() return shared.material.sheetAt(-ox,-oy) end
-   render(band,local_,nil)
-   postProcess=nil
-   item.label.Position=UDim2.fromOffset(ox/k,oy/k);item.label.Visible=true
-   return
-  end
-  -- free fall from the pinch-off point (starting speed = the sag's final speed)
-  local tau=t-drip.F-drip.Sd;local v0=52/drip.Sd
-  local x=drip.x;local y=drip.y1+v0*tau+.5*DRIP_G*tau*tau;local v=v0+DRIP_G*tau
-  if y+R>=h-3 then
-   -- landing: becomes an edge droplet on the bottom edge, carrying its momentum
-   local sw,sh,q=w-2*r,h-2*r,pi*r/2
-   drops[#drops+1]={slot=item,start=clock,bud=1,float=rand(1.2,2.2),back=rand(1.6,2.4),arc=sw/2+q+sh+q+(w-r-x),out=rand(.75,1)*REF_R,r=R,speed=rand(.12,.3)*REF_R*(rand(0,1)<.5 and -1 or 1),bob=rand(.6,1.2),phase=0,split=false,splitSpin=3,impact={off=y-h,v=v*.22}}
+  if t>=drip.F+drip.Sd then
+   -- pinch-off: hand it to the falling list; sometimes (always the first time)
+   -- another drip starts gathering right away
+   falling[#falling+1]={slot=item,R=R,x=drip.x,y1=drip.y1,v0=52/drip.Sd,t0=clock}
+   if not doubled or rand(0,1)<.2 then doubled=true;nextDrip=clock+rand(.15,.4) end
    drip=nil
    return
   end
-  -- a small trailing bead stretches the drop into a teardrop as it speeds up
-  local tail=min(v*.014,R*1.2)
-  local ox,oy=floor((x-WINDOW/2)/S)*S,floor((y-WINDOW/2)/S)*S
-  local bodies={{x-ox,y-oy,R},{x-ox,y-tail-oy,R*.55}}
+  -- hanging: gather under the edge, then sag on a thinning neck until it pinches off
+  local x=lo+(hi-lo)*drip.fx
+  local bodies={};local cy,rr
+  if t<drip.F then
+   local u=t/drip.F;local e=1-(1-u)^3
+   rr=R*(.3+.7*e)*(1+.05*sin(t*6));cy=ey+rr*.55+3*e
+   -- liquid gathering: two side beads slide in along the underside and merge
+   local gap=drip.spread*(1-e);local sr=R*(.55-.25*e)
+   if gap>1 then bodies[#bodies+1]={x-gap,ey+sr*.35,sr};bodies[#bodies+1]={x+gap,ey+sr*.35,sr} end
+  else
+   local u=(t-drip.F)/drip.Sd
+   rr=R*(1-.06*u);cy=ey+R*.55+3+26*u*u
+   for i=1,3 do local f=i/4;local nr=R*(.6-.48*u)*(1-.25*f);if nr>.8 then bodies[#bodies+1]={x,ey+(cy-ey)*f*.9,nr} end end
+  end
+  bodies[#bodies+1]={x,cy,rr}
+  drip.x,drip.y1=x,cy
+  local ox,oy=floor((x-WINDOW/2)/S)*S,floor((ey-64)/S)*S
+  -- the tab bar's underside as the parent body; rows above it are erased afterwards
+  local band={{x-70-ox,ey-30-oy},{x+70-ox,ey-30-oy},{x+70-ox,ey-oy},{x-70-ox,ey-oy}}
+  local local_={};for j,b in ipairs(bodies) do local_[j]={b[1]-ox,b[2]-oy,b[3]} end
   use(item.surface);clearRow=nil
-  postProcess=function() tintCircles(bodies,DRIP_TINT) end
+  local top=floor((ey-oy)/S)+1
+  local clipBytes=min(OH,top*S+2)*OW*4
+  postProcess=function() fill(pixels,0,0,clipBytes);tintCircles(local_,DRIP_TINT) end
   material.compose=function() return shared.material.sheetAt(-ox,-oy) end
-  render({},bodies,nil)
+  render(band,local_,nil)
   postProcess=nil
   item.label.Position=UDim2.fromOffset(ox/k,oy/k);item.label.Visible=true
  end
@@ -4648,6 +4659,128 @@ do
     end
    end
    updateDrip(w,h,r)
+  end}
+end
+
+-- Notification morph: a blob buds out of the panel edge, fills and widens into
+-- the card while the neck between them thins; at ~80% full the neck snaps and
+-- pulls back into the panel, the card wobbles into its final size, and the real
+-- notification fades in over it (text included). Closing plays it in reverse.
+local toastMorph=nil
+do
+ local WW,WH=296,148
+ local surface,label=nil,nil
+ local m=nil
+ local BUD,FILL,RETRACT,WOBBLE=.22,.44,.14,.34
+ local SNAP=BUD+FILL*.8
+ local function ensure()
+  if surface then return end
+  surface=newSurface(WW,WH)
+  label=create('ImageLabel',{Name='ToastMorph',BackgroundTransparency=1,Size=UDim2.fromOffset(WW/k,WH/k),ImageContent=Content.fromObject(surface.image),ZIndex=1,Visible=false,Parent=panel})
+  passThrough(label)
+ end
+ local function smooth(a) a=clamp(a,0,1);return a*a*(3-2*a) end
+ local function rrect(cx,cy,ww,hh,rad,list)
+  rad=min(rad,ww/2,hh/2)
+  local hw,hh2=ww/2-rad,hh/2-rad
+  for _,c in ipairs({{hw,-hh2,-pi/2},{hw,hh2,0},{-hw,hh2,pi/2},{-hw,-hh2,pi}}) do
+   for i=0,7 do local a=c[3]+i/7*pi/2;list[#list+1]={cx+c[1]+cos(a)*rad,cy+c[2]+sin(a)*rad} end
+  end
+ end
+ -- the panel's own outline runs off the window's edges: fade a band along every
+ -- border so those cuts are invisible (the card always sits well inside it)
+ local function fadeBorders()
+  local N=28
+  local readu32,writeu32=buffer.readu32,buffer.writeu32
+  for y=0,OH-1 do
+   local dy=min(y,OH-1-y)
+   local x=0
+   while x<OW do
+    local d=min(min(x,OW-1-x),dy)
+    if d>=N then x=OW-N else
+     local off=(y*OW+x)*4;local v=readu32(pixels,off);local a=floor(v/16777216)
+     if a>0 then writeu32(pixels,off,v%16777216+floor(a*d/N+.5)*16777216) end
+     x+=1
+    end
+   end
+  end
+ end
+ local function draw(tau,opening,w,h,r)
+  local dir=m.onRight and 1 or -1
+  local cw,ch=TOAST_SIZE.X*k,TOAST_SIZE.Y*k
+  local gap=Layout.gap*k
+  local ex=m.onRight and w or 0
+  local ey=h-ch/2
+  local cx1=ex+dir*(gap+cw/2)
+  local ox=m.onRight and floor((ex-52)/S)*S or floor((ex-gap-cw-44)/S)*S
+  local oy=floor((ey-WH/2)/S)*S
+  local circles,poly={},nil
+  if tau<BUD then
+   local u=tau/BUD;local e=1-(1-u)^3
+   local br=4+12*e
+   circles[1]={ex+dir*(-4+br*.9*e+6*e)-ox,ey-oy,br}
+  else
+   local u=min(1,(tau-BUD)/FILL)
+   local e=u<.5 and 4*u*u*u or 1-(-2*u+2)^3/2
+   local bx=ex+dir*16.8
+   local ccx=bx+(cx1-bx)*e
+   local ww,hh=32+(cw-32)*e,32+(ch-32)*e
+   if opening and tau>BUD+FILL then local t2=tau-BUD-FILL;local s=.07*math.exp(-7*t2)*sin(24*t2);ww*=1+s;hh*=1-s*.6 end
+   poly={};rrect(ccx-ox,ey-oy,ww,hh,18*k,poly)
+   local inner=ccx-dir*ww/2
+   local ein=ex-dir*4
+   if tau<SNAP then
+    local ns=clamp((tau-BUD)/(SNAP-BUD),0,1);local nr=9-5*ns
+    for _,f in ipairs({.25,.5,.75}) do circles[#circles+1]={ein+(inner+dir*4-ein)*f-ox,ey-oy,nr*(1-.35*(1-math.abs(2*f-1)))} end
+   elseif tau<SNAP+RETRACT then
+    local q=smooth((tau-SNAP)/RETRACT)
+    for _,f in ipairs({.25,.5,.75}) do circles[#circles+1]={ein+(inner+dir*4-ein)*f*(1-q)-ox,ey-oy,(4-1.75*(1-math.abs(2*f-1)))*(1-q)} end
+   end
+  end
+  -- panel outline, then the card as a second loop; the doubled bridge between
+  -- them cancels itself out under the even-odd fill
+  local per=perimeter(w,h,r);local pts={}
+  for i=1,120 do local x,y=outlineAt((i-1)/120*per,w,h,r);pts[i]={x-ox,y-oy} end
+  if poly then pts[#pts+1]=pts[1];for _,pt in ipairs(poly) do pts[#pts+1]=pt end;pts[#pts+1]=poly[1] end
+  local bodies={};for _,c in ipairs(circles) do if c[3]>.6 then bodies[#bodies+1]=c end end
+  use(surface);clearRow=nil;postProcess=fadeBorders
+  material.compose=function() return shared.material.sheetAt(-ox,-oy) end
+  render(pts,bodies,nil)
+  postProcess=nil
+  label.Position=UDim2.fromOffset(ox/k,oy/k);label.Visible=true
+ end
+ local fadeToken=0
+ toastMorph={
+  open=function(onRight,onDone) ensure();fadeToken+=1;label.ImageTransparency=0;m={opening=true,start=clock,onRight=onRight,onDone=onDone} end,
+  close=function(onRight,onDone) ensure();fadeToken+=1;label.ImageTransparency=0;m={opening=false,start=clock+.18,onRight=onRight,onDone=onDone} end,
+ }
+ jobs[#jobs+1]={name='toast',interval=0,elapsed=0,
+  active=function() return m~=nil and root.Visible end,
+  reset=function()
+   -- interrupted (panel hidden/minimized): finish immediately
+   if m then local cb=m.onDone;m=nil;if label then label.Visible=false end;if cb then cb() end end
+  end,
+  run=function()
+   if not m then return end
+   local size=panelPixels();local w,h=size.X,size.Y;local r=contourRadius()
+   local el=clock-m.start
+   if m.opening then
+    local tau=min(el,BUD+FILL+WOBBLE)
+    draw(tau,true,w,h,r)
+    if el>=BUD+FILL+WOBBLE then
+     local cb=m.onDone;m=nil
+     if cb then cb() end
+     fadeToken+=1;local token=fadeToken
+     tween(label,.25,{ImageTransparency=1})
+     task.delay(.27,function() if token==fadeToken and label then label.Visible=false end end)
+    end
+   else
+    local tau=min(BUD+FILL,BUD+FILL-el*1.15)
+    if tau<=0 then
+     local cb=m.onDone;m=nil;label.Visible=false
+     if cb then cb() end
+    else draw(tau,false,w,h,r) end
+   end
   end}
 end
 
@@ -4942,9 +5075,10 @@ liquid.service=function(dt)
  end
 end
 track(function() stopped=true;liquid.service=nil end)
-return {jobs=jobs}
+return {jobs=jobs,toast=toastMorph}
 end)()
 end) if not fieldOk then warn('[LiquidField] disabled',fieldError) end end
+Resize.liquidToast=liquidField and liquidField.toast or nil
 
         function Resize.setMinimized(minimized: boolean, instant: boolean?)
             if state.closing then return end
@@ -5074,6 +5208,28 @@ local function showToast(title: string, content: string?, duration: number?)
     local finalX = if onRight then UDim.new(1, Layout.gap) else UDim.new(0, -Layout.gap - TOAST_SIZE.X)
     local startX = UDim.new(finalX.Scale, finalX.Offset + (if onRight then -14 else 14))
     local y = UDim.new(1, -TOAST_SIZE.Y)
+
+    -- Liquid morph: the card grows out of the panel edge as a blob, then the real
+    -- notification fades in over it; on the way out it melts back into the panel.
+    local morph = Resize.liquidToast
+    if morph and Layout.performance ~= "Low" and not Resize.minimized then
+        playFade(toastFade, false, 0)
+        toast.Visible = false
+        toast.Position = UDim2.new(finalX, y)
+        morph.open(onRight, function()
+            if token ~= toastToken or not toast.Parent then return end
+            toast.Visible = true
+            playFade(toastFade, true, 0.25)
+            task.delay(duration or 2.4, function()
+                if token ~= toastToken or not toast.Parent then return end
+                playFade(toastFade, false, 0.2)
+                morph.close(onRight, function()
+                    if token == toastToken and toast.Parent then toast.Visible = false end
+                end)
+            end)
+        end)
+        return
+    end
 
     toast.Visible = true
     toast.Position = UDim2.new(startX, y)
