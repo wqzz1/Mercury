@@ -2728,7 +2728,7 @@ do
    if not nextDrip then nextDrip=clock+rand(3,6) end
    if clock<nextDrip or hi<=lo then return end
    nextDrip=clock+rand(9,16)
-   drip={slot=slot(),start=clock,fx=rand(0,1),F=rand(1.6,2.4),Sd=rand(.75,1.05),R=rand(8.5,10.5)}
+   drip={slot=slot(),start=clock,fx=rand(0,1),F=rand(.9,1.35),Sd=rand(.5,.72),R=rand(8.5,10.5),spread=rand(16,24)}
   end
   local item=drip.slot;local R=drip.R
   local t=clock-drip.start
@@ -2739,6 +2739,9 @@ do
    if t<drip.F then
     local u=t/drip.F;local e=1-(1-u)^3
     rr=R*(.3+.7*e)*(1+.05*sin(t*6));cy=ey+rr*.55+3*e
+    -- liquid gathering: two side beads slide in along the underside and merge
+    local gap=drip.spread*(1-e);local sr=R*(.55-.25*e)
+    if gap>1 then bodies[#bodies+1]={x-gap,ey+sr*.35,sr};bodies[#bodies+1]={x+gap,ey+sr*.35,sr} end
    else
     local u=(t-drip.F)/drip.Sd
     rr=R*(1-.06*u);cy=ey+R*.55+3+26*u*u
@@ -2755,7 +2758,7 @@ do
    local clipBytes=min(OH,top*S+2)*OW*4
    postProcess=function() fill(pixels,0,0,clipBytes);tintCircles(local_,DRIP_TINT) end
    material.compose=function() return shared.material.sheetAt(-ox,-oy) end
-   render(band,local_,{0,top,W-1,H-1})
+   render(band,local_,nil)
    postProcess=nil
    item.label.Position=UDim2.fromOffset(ox/k,oy/k);item.label.Visible=true
    return

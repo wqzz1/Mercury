@@ -668,20 +668,29 @@ function window:CreateTab(name, icon)
         -- letters, like light passing over glass. It is a narrow white band in a
         -- UIGradient on the title text whose Offset is tweened from left to right.
         local glowLayers = {}
-        local glint = create("UIGradient", {Rotation = 20, Offset = Vector2.new(-1.2, 0), Color = ColorSequence.new({
-            ColorSequenceKeypoint.new(0, Theme.mist),
-            ColorSequenceKeypoint.new(0.36, Theme.mist),
-            ColorSequenceKeypoint.new(0.5, Color3.new(1, 1, 1)),
-            ColorSequenceKeypoint.new(0.64, Theme.mist),
-            ColorSequenceKeypoint.new(1, Theme.mist),
-        }), Parent = heading})
+        -- band profile (moving right): a long, faint, eased ghost trail on the left,
+        -- a smooth rise, a flat white core about 1.5 letters wide, a quicker fall-off
+        local glintKeys = {}
+        local function glintAt(x)
+            local function smooth(a) a = math.clamp(a, 0, 1); return a * a * (3 - 2 * a) end
+            if x < 0.08 then return 0
+            elseif x < 0.40 then return 0.3 * ((x - 0.08) / 0.32) ^ 2.2
+            elseif x < 0.45 then return 0.3 + 0.7 * smooth((x - 0.40) / 0.05)
+            elseif x <= 0.57 then return 1
+            else return 1 - smooth((x - 0.57) / 0.06) end
+        end
+        for _, x in {0, 0.08, 0.14, 0.2, 0.26, 0.32, 0.37, 0.40, 0.425, 0.45, 0.57, 0.6, 0.63, 1} do
+            table.insert(glintKeys, ColorSequenceKeypoint.new(x, Theme.mist:Lerp(Color3.new(1, 1, 1), glintAt(x))))
+        end
+        local glint = create("UIGradient", {Rotation = 20, Offset = Vector2.new(-1.2, 0),
+            Color = ColorSequence.new(glintKeys), Parent = heading})
         task.spawn(function()
             local glintRng = Random.new()
             task.wait(glintRng:NextNumber(1.5, 4))
             while holder.Parent and not state.destroyed do
                 glint.Offset = Vector2.new(-1.2, 0)
-                tween(glint, 1.1, {Offset = Vector2.new(1.2, 0)}, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
-                task.wait(1.1 + glintRng:NextNumber(6, 10))
+                tween(glint, 2.4, {Offset = Vector2.new(1.2, 0)}, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
+                task.wait(2.4 + glintRng:NextNumber(6, 10))
             end
         end)
         -- The rule is the right half of the regular divider: same layer count, taper,
