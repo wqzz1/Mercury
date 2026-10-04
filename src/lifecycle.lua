@@ -31,7 +31,8 @@ local function showToast(title: string, content: string?, duration: number?, kin
     -- Liquid morph: the card grows out of the panel edge as a blob, then the real
     -- notification fades in over it; on the way out it melts back into the panel.
     local morph = Resize.liquidToast
-    if morph and Layout.performance ~= "Low" and not Resize.minimized then
+    -- parallel-worker liquid when the executor supports actors; otherwise the plain slide-in
+    if morph and morph.ready() and Layout.performance ~= "Low" and not Resize.minimized then
         playFade(toastFade, false, 0)
         toast.Visible = false
         setToastChrome(false)

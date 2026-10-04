@@ -4867,276 +4867,369 @@ do
   end}
 end
 
--- Notification morph: the card is FILLED by simulated liquid (particle fluid,
--- double-density relaxation). It squeezes out of the panel edge, a jet rushes
--- across the card, slams the far wall, sloshes back and floods it; the neck then
--- snaps back into the panel and the surface settles into the clean card, which
--- stays as the notification's body while the text is shown. Closing drains the
--- liquid back into the panel through a wide neck. Each particle is drawn as a
--- small blob through the shared liquid renderer, which merges them into one
--- smooth surface with the panel's marble and rim light.
+-- Notification morph, on parallel workers. The card is FILLED by simulated
+-- liquid (particle fluid): it squeezes out of the panel edge, rushes across,
+-- slams the far wall, sloshes back and floods the card; the neck snaps back and
+-- the surface settles into the clean card, which stays as the notification's
+-- body while the text shows. Closing drains it back through a wide neck.
+-- The work runs on Roblox Parallel Luau actors (the executor's run_on_actor /
+-- create_comm_channel / get_comm_channel): one actor simulates the liquid, two
+-- draw half the picture each, at the same time on separate cores. The main
+-- thread only sends the marble under the window and uploads finished pixels.
+-- No actor support (or the workers don't answer) = toastMorph.ready() stays
+-- false and notifications use the plain slide-in animation instead.
 local toastMorph=nil
 do
- local WW,WH=256,116   -- card + 30 px around it (fade band 22 px)
- local surface,label=nil,nil
- local m=nil
- -- fluid parameters (px, frames at 60 fps; 2 substeps per frame)
- local FL={h=15,rho0=3,k=.75,kn=2.5,sig=.2,beta=.1,maxV=10,count=260,rush=8.5,blob=5.4}
- local function ensure()
-  if surface then return end
-  surface=newSurface(WW,WH)
-  label=create('ImageLabel',{Name='ToastMorph',BackgroundTransparency=1,Size=UDim2.fromOffset(WW/k,WH/k),ImageContent=Content.fromObject(surface.image),ZIndex=1,Visible=false,Parent=panel})
-  passThrough(label)
+ local W_,H_=256,116
+ local SIM_SRC=[==[
+local id=...
+local ch=get_comm_channel(id)
+local floor,min,max,sqrt=math.floor,math.min,math.max,math.sqrt
+local rng=Random.new()
+local function rand(a,b) return rng:NextNumber(a,b) end
+local FL={h=15,rho0=3,k=.75,kn=2.5,sig=.2,beta=.1,maxV=10,count=260,rush=8.5}
+local function sdRound(x,y,x0,y0,x1,y1,r)
+ local qx=math.abs(x-(x0+x1)/2)-((x1-x0)/2-r);local qy=math.abs(y-(y0+y1)/2)-((y1-y0)/2-r)
+ local ox,oy=max(qx,0),max(qy,0)
+ return sqrt(ox*ox+oy*oy)+min(max(qx,qy),0)-r
+end
+local function newSim(g) return {g=g,xs={},ys={},vx={},vy={},px={},py={},t=0,injected=0,neckOpen=true,neckH=11,mode='fill',snapAt=-1,suck=false,absorb=false} end
+local function sdAllowed(sim,x,y)
+ local g=sim.g
+ local d=sdRound(x,y,g.gap,g.cy-g.ch/2,g.gap+g.cw,g.cy+g.ch/2,g.rad)
+ if sim.neckOpen then d=min(d,sdRound(x,y,-10,g.cy-sim.neckH,g.gap+12,g.cy+sim.neckH,min(9,sim.neckH))) end
+ return d
+end
+local function inject(sim,n,speed,spread)
+ for _=1,n do local i=#sim.xs+1
+  sim.xs[i]=-4.5+rand(0,2.2);sim.ys[i]=sim.g.cy+rand(-1,1)*spread
+  sim.vx[i]=speed*rand(.9,1.1);sim.vy[i]=rand(-1,1)*speed*.08;sim.px[i]=0;sim.py[i]=0 end
+ sim.injected+=n
+end
+local function removeAt(sim,i)
+ local last=#sim.xs
+ for _,arr in ipairs({sim.xs,sim.ys,sim.vx,sim.vy,sim.px,sim.py}) do arr[i]=arr[last];arr[last]=nil end
+end
+local function buildGrid(xs,ys,h)
+ local grid={}
+ for i=1,#xs do local key=floor(xs[i]/h)+floor(ys[i]/h)*4096;local c=grid[key];if not c then c={};grid[key]=c end;c[#c+1]=i end
+ return grid
+end
+local function substep(sim,dt)
+ local xs,ys,vx,vy,px,py=sim.xs,sim.ys,sim.vx,sim.vy,sim.px,sim.py
+ local n=#xs;if n==0 then return end
+ local h=FL.h;local g=sim.g
+ local grid=buildGrid(xs,ys,h)
+ if sim.suck then for i=1,n do vx[i]-=.5*dt;if xs[i]<g.gap+16 then vy[i]+=(g.cy-ys[i])*.025*dt end end end
+ for i=1,n do
+  local cx,cy=floor(xs[i]/h),floor(ys[i]/h)
+  for oy=-1,1 do for ox=-1,1 do local cell=grid[cx+ox+(cy+oy)*4096]
+   if cell then for _,j in ipairs(cell) do if j>i then
+    local dx,dy=xs[j]-xs[i],ys[j]-ys[i];local r=sqrt(dx*dx+dy*dy)
+    if r>0 and r<h then local q=r/h;local ux,uy=dx/r,dy/r;local u=(vx[i]-vx[j])*ux+(vy[i]-vy[j])*uy
+     if u>0 then local I=dt*(1-q)*(FL.sig*u+FL.beta*u*u)/2;vx[i]-=I*ux;vy[i]-=I*uy;vx[j]+=I*ux;vy[j]+=I*uy end end
+   end end end end end
  end
- local function rrect(cx,cy,ww,hh,rad,list)
-  rad=min(rad,ww/2,hh/2)
-  local hw,hh2=ww/2-rad,hh/2-rad
-  for _,c in ipairs({{hw,-hh2,-pi/2},{hw,hh2,0},{-hw,hh2,pi/2},{-hw,-hh2,pi}}) do
-   for i=0,7 do local a=c[3]+i/7*pi/2;list[#list+1]={cx+c[1]+cos(a)*rad,cy+c[2]+sin(a)*rad} end
+ for i=1,n do
+  local s=sqrt(vx[i]*vx[i]+vy[i]*vy[i]);if s>FL.maxV then vx[i]*=FL.maxV/s;vy[i]*=FL.maxV/s end
+  px[i],py[i]=xs[i],ys[i];xs[i]+=vx[i]*dt;ys[i]+=vy[i]*dt
+ end
+ grid=buildGrid(xs,ys,h)
+ local rho,rhoN=table.create(n,0),table.create(n,0)
+ local pI,pJ,pQ={},{},{}
+ for i=1,n do
+  local cx,cy=floor(xs[i]/h),floor(ys[i]/h)
+  for oy=-1,1 do for ox=-1,1 do local cell=grid[cx+ox+(cy+oy)*4096]
+   if cell then for _,j in ipairs(cell) do if j>i then
+    local dx,dy=xs[j]-xs[i],ys[j]-ys[i];local r=sqrt(dx*dx+dy*dy)
+    if r<h then local q=1-r/h;local q2=q*q;local q3=q2*q
+     rho[i]+=q2;rho[j]+=q2;rhoN[i]+=q3;rhoN[j]+=q3
+     if r>1e-6 then local c=#pI+1;pI[c]=i;pJ[c]=j;pQ[c]=q end end
+   end end end end end
+ end
+ local dt2=dt*dt
+ for c=1,#pI do
+  local i,j,q=pI[c],pJ[c],pQ[c]
+  local dx,dy=xs[j]-xs[i],ys[j]-ys[i];local r=sqrt(dx*dx+dy*dy)
+  if r>1e-6 then
+   local P=FL.k*((rho[i]+rho[j])/2-FL.rho0);local Pn=FL.kn*(rhoN[i]+rhoN[j])/2
+   local D=dt2*(P*q+Pn*q*q)/2;local ux,uy=dx/r*D,dy/r*D
+   xs[j]+=ux;ys[j]+=uy;xs[i]-=ux;ys[i]-=uy
   end
  end
- -- the panel's own outline runs off the window's edges: fade a band along every
- -- border so those cuts are invisible (the card always sits well inside it)
- local function fadeBorders()
-  local N=22
-  local readu32,writeu32=buffer.readu32,buffer.writeu32
-  for y=0,OH-1 do
-   local dy=min(y,OH-1-y)
-   local x=0
-   while x<OW do
-    local d=min(min(x,OW-1-x),dy)
-    if d>=N then x=OW-N else
-     local off=(y*OW+x)*4;local v=readu32(pixels,off);local a=floor(v/16777216)
-     if a>0 then writeu32(pixels,off,v%16777216+floor(a*d/N+.5)*16777216) end
-     x+=1
+ for i=n,1,-1 do
+  if xs[i]<-6 and (sim.absorb or not sim.neckOpen) then removeAt(sim,i) else
+   if xs[i]<-6 then xs[i]=-6 end
+   local d=sdAllowed(sim,xs[i],ys[i])+2
+   if d>0 then
+    local e=.5
+    local gx=sdAllowed(sim,xs[i]+e,ys[i])-sdAllowed(sim,xs[i]-e,ys[i])
+    local gy=sdAllowed(sim,xs[i],ys[i]+e)-sdAllowed(sim,xs[i],ys[i]-e)
+    local gl=sqrt(gx*gx+gy*gy);if gl<1e-6 then gl=1 end
+    xs[i]-=gx/gl*d;ys[i]-=gy/gl*d;px[i]+=(xs[i]-px[i])*.25
+   end
+  end
+ end
+ for i=1,#xs do vx[i]=(xs[i]-px[i])/dt;vy[i]=(ys[i]-py[i])/dt end
+end
+local function simFrame(sim)
+ sim.t+=1/60
+ local g=sim.g
+ if sim.mode=='fill' then
+  if sim.t<.18 then if rand(0,1)<.6 then inject(sim,1,1.4,1.5) end
+  elseif sim.injected<FL.count then inject(sim,min(10,FL.count-sim.injected),FL.rush,4.2)
+  elseif sim.snapAt<0 then sim.snapAt=sim.t+.12 end
+  if sim.snapAt>0 and sim.t>=sim.snapAt and sim.neckOpen then
+   sim.neckOpen=false
+   for i=1,#sim.xs do if sim.xs[i]<g.gap+2 then sim.vx[i]=-3.3 end end
+  end
+  if not sim.neckOpen then for i=1,#sim.xs do if sim.xs[i]<g.gap-.5 then sim.vx[i]=min(sim.vx[i],-2.8) end end end
+ end
+ substep(sim,.5);substep(sim,.5)
+end
+local function fullSim(g)
+ local sim=newSim(g);local d=6.6;local row=0
+ local y=g.cy-g.ch/2+3.3
+ while y<g.cy+g.ch/2-2 do
+  local x=g.gap+3.3+(row%2)*d/2
+  while x<g.gap+g.cw-2 do
+   if sdRound(x,y,g.gap,g.cy-g.ch/2,g.gap+g.cw,g.cy+g.ch/2,g.rad)<-2.5 then
+    local i=#sim.xs+1;sim.xs[i]=x;sim.ys[i]=y;sim.vx[i]=0;sim.vy[i]=0;sim.px[i]=x;sim.py[i]=y end
+   x+=d
+  end
+  y+=d*.866;row+=1
+ end
+ sim.injected=FL.count;sim.mode='drain';sim.neckOpen=true;sim.neckH=g.ch*.32;sim.suck=true;sim.absorb=true
+ return sim
+end
+local sim,simClock=nil,0
+ch.Event:Connect(function(tag,a)
+ if tag=='simOpen' then sim=newSim(a);simClock=os.clock()
+ elseif tag=='simClose' then sim=fullSim(a);simClock=os.clock()
+ elseif tag=='simStop' then sim=nil
+ elseif tag=='tick' and sim then
+  task.desynchronize()
+  local now=os.clock();local due=floor((now-simClock)*60)
+  if due>4 then simClock=now-4/60;due=4 end
+  for _=1,due do simFrame(sim);simClock+=1/60 end
+  local n=#sim.xs;local buf=buffer.create(math.max(1,n)*8)
+  for i=1,n do buffer.writef32(buf,(i-1)*8,sim.xs[i]);buffer.writef32(buf,(i-1)*8+4,sim.ys[i]) end
+  local neck,st,snap=sim.neckOpen,sim.t,sim.snapAt
+  task.synchronize()
+  ch:Fire('pos',buf,n,neck,st,snap)
+ end
+end)
+ch:Fire('ready')
+]==]
+ local RENDER_SRC=[==[
+local id,part,parts,W,H=...
+local ch=get_comm_channel(id)
+local floor,min,max,sqrt,exp,abs=math.floor,math.min,math.max,math.sqrt,math.exp,math.abs
+local readu32,writeu32,readf32=buffer.readu32,buffer.writeu32,buffer.readf32
+local RIM_R,RIM_G,RIM_B=226,214,246
+local FW,FH=W//2+1,H//2+1
+local field,tmp=table.create(FW*FH,0),table.create(FW*FH,0)
+local function clamp(v,a,b) if v<a then return a elseif v>b then return b end return v end
+local function sdRR(x,y,x0,y0,x1,y1,r)
+ local qx=abs(x-(x0+x1)/2)-((x1-x0)/2-r);local qy=abs(y-(y0+y1)/2)-((y1-y0)/2-r)
+ local ox,oy=max(qx,0),max(qy,0)
+ return sqrt(ox*ox+oy*oy)+min(max(qx,qy),0)-r
+end
+local y0,y1=floor(H*(part-1)/parts),floor(H*part/parts)
+ch.Event:Connect(function(tag,fid,ox,oy,w,h,r,dir,ex,g,cardScale,pos,n,mat)
+ if tag~='tick' then return end
+ task.desynchronize()
+ -- field on a 2 px grid: the panel itself, the settling card, the particles
+ local cx0,hw,hh,cr=0,0,0,0
+ if cardScale>0 then cx0=ex+dir*(g.gap+g.cw/2);hw,hh,cr=g.cw*cardScale/2,g.ch*cardScale/2,g.rad*cardScale end
+ for j=0,FH-1 do
+  local py=oy+j*2;local row=j*FW
+  for i=0,FW-1 do
+   local px=ox+i*2
+   local f=clamp(.5-sdRR(px,py,0,0,w,h,r)/5,0,1.2)
+   if cardScale>0 then local c=clamp(.5-sdRR(px,py,cx0-hw,g.cy-hh,cx0+hw,g.cy+hh,cr)/5,0,1.2);if c>f then f=c end end
+   field[row+i+1]=f
+  end
+ end
+ if pos and n>0 then
+  local R=4.5;local R2=R*R
+  for p=0,n-1 do
+   local X=ex+dir*readf32(pos,p*8);local Y=readf32(pos,p*8+4)
+   local cx,cy=(X-ox)/2,(Y-oy)/2
+   local i0,i1=max(0,floor(cx-R)),min(FW-1,math.ceil(cx+R))
+   local j0,j1=max(0,floor(cy-R)),min(FH-1,math.ceil(cy+R))
+   for j=j0,j1 do local dy=j-cy;local row=j*FW
+    for i=i0,i1 do local dx=i-cx;local d2=dx*dx+dy*dy
+     if d2<R2 then local k=1-d2/R2;field[row+i+1]+=k*k*.62 end end end
+  end
+  -- one 1-2-1 smoothing pass: the particles read as one surface
+  for j=0,FH-1 do local row=j*FW
+   tmp[row+1]=field[row+1];tmp[row+FW]=field[row+FW]
+   for i=1,FW-2 do tmp[row+i+1]=(field[row+i]+2*field[row+i+1]+field[row+i+2])*.25 end end
+  for i=0,FW-1 do
+   field[i+1]=tmp[i+1];field[(FH-1)*FW+i+1]=tmp[(FH-1)*FW+i+1]
+   for j=1,FH-2 do field[j*FW+i+1]=(tmp[(j-1)*FW+i+1]+2*tmp[j*FW+i+1]+tmp[(j+1)*FW+i+1])*.25 end end
+ end
+ -- shade this worker's rows: anti-aliased edge, Mercury's rim light, marble inside
+ local out=buffer.create((y1-y0)*W*4)
+ for y=y0,y1-1 do
+  local fy=y/2;local jy=floor(fy);local ty=fy-jy;if jy>=FH-1 then jy=FH-2;ty=1 end
+  local orow=(y-y0)*W
+  for x=0,W-1 do
+   local fx=x/2;local ix=floor(fx);local tx=fx-ix;if ix>=FW-1 then ix=FW-2;tx=1 end
+   local a00,a10=field[jy*FW+ix+1],field[jy*FW+ix+2]
+   local a01,a11=field[(jy+1)*FW+ix+1],field[(jy+1)*FW+ix+2]
+   local v=(a00*(1-tx)+a10*tx)*(1-ty)+(a01*(1-tx)+a11*tx)*ty
+   if v>.2 then
+    local gx=((a10-a00)*(1-ty)+(a11-a01)*ty)/2
+    local gy=((a01-a00)*(1-tx)+(a11-a10)*tx)/2
+    local gl=sqrt(gx*gx+gy*gy)+1e-6
+    local dist=(v-.5)/gl
+    local alpha=dist+.5
+    if alpha>0 then
+     if alpha>1 then alpha=1 end
+     local light=(gx*.6+gy*.8)/gl;if light<0 then light=0 elseif light>1 then light=1 end
+     local dd=dist>0 and dist or 0
+     local shine=exp(-dd*.8)*(.18+.82*light)*.8+exp(-dd*.13)*.22*light;if shine>1 then shine=1 end
+     local edge=min(min(x,W-1-x),min(y,H-1-y));if edge<22 then alpha*=edge/22 end
+     local base=readu32(mat,(y*W+x)*4)
+     local br,bg,bb=base%256,floor(base/256)%256,floor(base/65536)%256
+     writeu32(out,(orow+x)*4,floor(br+(RIM_R-br)*shine+.5)+floor(bg+(RIM_G-bg)*shine+.5)*256+floor(bb+(RIM_B-bb)*shine+.5)*65536+floor(alpha*255+.5)*16777216)
     end
    end
   end
  end
- local function sdRound(x,y,x0,y0,x1,y1,r)
-  local qx=math.abs(x-(x0+x1)/2)-((x1-x0)/2-r);local qy=math.abs(y-(y0+y1)/2)-((y1-y0)/2-r)
-  local ox,oy=max(qx,0),max(qy,0)
-  return sqrt(ox*ox+oy*oy)+min(max(qx,qy),0)-r
- end
- -- geometry in (s, y): s = distance outward from the panel edge, y = panel px
+ task.synchronize()
+ ch:Fire('img',fid,part,y0,y1,out)
+end)
+ch:Fire('ready')
+]==]
+ local ready,readyCount=false,0
+ local simChannel,drawChannel=nil,nil
+ local image,label=nil,nil
+ local m=nil
+ local simState={got=false,n=0,neckOpen=true,t=0,snapAt=-1,buf=nil}
+ local frameId,shownId=0,0
+ local pending={}
+ local crop=buffer.create(W_*H_*4)
  local function geometry(h)
   local cw,ch=TOAST_SIZE.X*k,TOAST_SIZE.Y*k
   return {gap=Layout.gap*k,cw=cw,ch=ch,cy=h-ch/2,rad=18*k}
  end
- local function newSim(g)
-  local sim={g=g,xs={},ys={},vx={},vy={},px={},py={},t=0,injected=0,neckOpen=true,neckH=11,mode='fill',snapAt=-1,suck=false,absorb=false}
-  return sim
- end
- local function sdAllowed(sim,x,y)
-  local g=sim.g
-  local d=sdRound(x,y,g.gap,g.cy-g.ch/2,g.gap+g.cw,g.cy+g.ch/2,g.rad)
-  if sim.neckOpen then d=min(d,sdRound(x,y,-10,g.cy-sim.neckH,g.gap+12,g.cy+sim.neckH,min(9,sim.neckH))) end
-  return d
- end
- local function inject(sim,n,speed,spread)
-  for _=1,n do
-   local i=#sim.xs+1
-   sim.xs[i]=-4.5+rand(0,2.2);sim.ys[i]=sim.g.cy+rand(-1,1)*spread
-   sim.vx[i]=speed*rand(.9,1.1);sim.vy[i]=rand(-1,1)*speed*.08;sim.px[i]=0;sim.py[i]=0
+ local function mirror(v,n) if v<0 then v=-v-1 elseif v>=n then v=2*n-v-1 end;if v<0 then return 0 elseif v>=n then return n-1 end;return v end
+ -- the marble under the window, cropped (mirrored past the sheet's edges)
+ local function cropMaterial(ox,oy)
+  local mat,mx,my,mw,mh=shared.material.sheetAt(-ox,-oy)
+  if not mat then buffer.fill(crop,0,0);return end
+  local readu32,writeu32=buffer.readu32,buffer.writeu32
+  for y=0,H_-1 do
+   local sy=mirror(y-my,mh)*mw
+   local a,b=max(0,mx),min(W_,mx+mw)
+   if b>a then buffer.copy(crop,(y*W_+a)*4,mat,(sy+a-mx)*4,(b-a)*4) end
+   for x=0,a-1 do writeu32(crop,(y*W_+x)*4,readu32(mat,(sy+mirror(x-mx,mw))*4)) end
+   for x=max(b,0),W_-1 do writeu32(crop,(y*W_+x)*4,readu32(mat,(sy+mirror(x-mx,mw))*4)) end
   end
-  sim.injected+=n
  end
- local function removeAt(sim,i)
-  local last=#sim.xs
-  for _,arr in ipairs({sim.xs,sim.ys,sim.vx,sim.vy,sim.px,sim.py}) do arr[i]=arr[last];arr[last]=nil end
+ local function onSim(tag,buf,n,neck,st,snap)
+  if tag=='ready' then readyCount+=1;ready=readyCount>=3
+  elseif tag=='pos' then simState.got=true;simState.buf=buf;simState.n=n;simState.neckOpen=neck;simState.t=st;simState.snapAt=snap end
  end
- local function buildGrid(xs,ys,h)
-  local grid={}
-  for i=1,#xs do local key=floor(xs[i]/h)+floor(ys[i]/h)*4096;local c=grid[key];if not c then c={};grid[key]=c end;c[#c+1]=i end
-  return grid
+ local function onDraw(tag,fid,part,y0,y1,buf)
+  if tag=='ready' then readyCount+=1;ready=readyCount>=3;return end
+  if tag~='img' or not image or fid<=shownId then return end
+  local entry=pending[fid];if not entry then entry={};pending[fid]=entry end
+  entry[part]={y0,y1,buf}
+  if entry[1] and entry[2] then
+   shownId=fid
+   for f in pairs(pending) do if f<=fid then pending[f]=nil end end
+   if not m then return end
+   for _,piece in ipairs(entry) do image:WritePixelsBuffer(Vector2.new(0,piece[1]),Vector2.new(W_,piece[2]-piece[1]),piece[3]) end
+   label.Position=UDim2.fromOffset(entry.ox/k,entry.oy/k);label.Visible=true
+  end
  end
- local function substep(sim,dt)
-  local xs,ys,vx,vy,px,py=sim.xs,sim.ys,sim.vx,sim.vy,sim.px,sim.py
-  local n=#xs;if n==0 then return end
-  local h=FL.h;local g=sim.g
-  local grid=buildGrid(xs,ys,h)
-  if sim.suck then
-   -- drain: flow back toward the panel along the card (no single-point pull, which
-   -- pinched the middle); only near the neck is it gently guided to centre
-   for i=1,n do vx[i]-=.5*dt;if xs[i]<g.gap+16 then vy[i]+=(g.cy-ys[i])*.025*dt end end
-  end
-  -- viscosity
-  for i=1,n do
-   local cx,cy=floor(xs[i]/h),floor(ys[i]/h)
-   for oy=-1,1 do for ox=-1,1 do
-    local cell=grid[cx+ox+(cy+oy)*4096]
-    if cell then for _,j in ipairs(cell) do if j>i then
-     local dx,dy=xs[j]-xs[i],ys[j]-ys[i];local r=sqrt(dx*dx+dy*dy)
-     if r>0 and r<h then
-      local q=r/h;local ux,uy=dx/r,dy/r;local u=(vx[i]-vx[j])*ux+(vy[i]-vy[j])*uy
-      if u>0 then local I=dt*(1-q)*(FL.sig*u+FL.beta*u*u)/2;vx[i]-=I*ux;vy[i]-=I*uy;vx[j]+=I*ux;vy[j]+=I*uy end
-     end
-    end end end
-   end end
-  end
-  for i=1,n do
-   local s=sqrt(vx[i]*vx[i]+vy[i]*vy[i]);if s>FL.maxV then vx[i]*=FL.maxV/s;vy[i]*=FL.maxV/s end
-   px[i],py[i]=xs[i],ys[i];xs[i]+=vx[i]*dt;ys[i]+=vy[i]*dt
-  end
-  -- double density relaxation
-  grid=buildGrid(xs,ys,h)
-  local rho,rhoN=table.create(n,0),table.create(n,0)
-  local pairsI,pairsJ,pairsQ={},{},{}
-  for i=1,n do
-   local cx,cy=floor(xs[i]/h),floor(ys[i]/h)
-   for oy=-1,1 do for ox=-1,1 do
-    local cell=grid[cx+ox+(cy+oy)*4096]
-    if cell then for _,j in ipairs(cell) do if j>i then
-     local dx,dy=xs[j]-xs[i],ys[j]-ys[i];local r=sqrt(dx*dx+dy*dy)
-     if r<h then
-      local q=1-r/h;local q2=q*q;local q3=q2*q
-      rho[i]+=q2;rho[j]+=q2;rhoN[i]+=q3;rhoN[j]+=q3
-      if r>1e-6 then local c=#pairsI+1;pairsI[c]=i;pairsJ[c]=j;pairsQ[c]=q end
-     end
-    end end end
-   end end
-  end
-  local dt2=dt*dt
-  for c=1,#pairsI do
-   local i,j,q=pairsI[c],pairsJ[c],pairsQ[c]
-   local dx,dy=xs[j]-xs[i],ys[j]-ys[i];local r=sqrt(dx*dx+dy*dy)
-   if r>1e-6 then
-    local P=FL.k*((rho[i]+rho[j])/2-FL.rho0);local Pn=FL.kn*(rhoN[i]+rhoN[j])/2
-    local D=dt2*(P*q+Pn*q*q)/2
-    local ux,uy=dx/r*D,dy/r*D
-    xs[j]+=ux;ys[j]+=uy;xs[i]-=ux;ys[i]-=uy
+ local origins={}
+ local function boot()
+  local run,make,get=executorEnv.run_on_actor,executorEnv.create_comm_channel,executorEnv.get_comm_channel
+  if typeof(run)~='function' or typeof(make)~='function' or typeof(get)~='function' then return end
+  local ok,err=pcall(function()
+   local holder=LocalPlayer:FindFirstChildOfClass('PlayerScripts') or LocalPlayer:WaitForChild('PlayerScripts',5)
+   local simId,simCh=make();local drawId,drawCh=make()
+   simChannel,drawChannel=simCh,drawCh
+   track(simCh.Event:Connect(onSim));track(drawCh.Event:Connect(onDraw))
+   local actors={}
+   for i=1,3 do
+    local actor=track(Instance.new('Actor'));actor.Name='MercuryLiquidWorker'..i;actor.Parent=holder
+    local idle=Instance.new('LocalScript');idle.Name='Idle';idle.Parent=actor   -- an empty script wakes the actor up
+    actors[i]=actor
    end
-  end
-  -- walls (the card, plus the neck while open); the panel takes liquid back
-  -- only after the snap or while draining
-  for i=n,1,-1 do
-   if xs[i]<-6 and (sim.absorb or not sim.neckOpen) then removeAt(sim,i) else
-    if xs[i]<-6 then xs[i]=-6 end
-    local d=sdAllowed(sim,xs[i],ys[i])+2
-    if d>0 then
-     local e=.5
-     local gx=sdAllowed(sim,xs[i]+e,ys[i])-sdAllowed(sim,xs[i]-e,ys[i])
-     local gy=sdAllowed(sim,xs[i],ys[i]+e)-sdAllowed(sim,xs[i],ys[i]-e)
-     local gl=sqrt(gx*gx+gy*gy);if gl<1e-6 then gl=1 end
-     xs[i]-=gx/gl*d;ys[i]-=gy/gl*d
-     px[i]+=(xs[i]-px[i])*.25   -- wall friction
+   task.wait(.3)
+   run(actors[1],SIM_SRC,simId)
+   run(actors[2],RENDER_SRC,drawId,1,2,W_,H_)
+   run(actors[3],RENDER_SRC,drawId,2,2,W_,H_)
+   image=AS:CreateEditableImage({Size=Vector2.new(W_,H_)})
+   label=create('ImageLabel',{Name='ToastMorph',BackgroundTransparency=1,Size=UDim2.fromOffset(W_/k,H_/k),ImageContent=Content.fromObject(image),ZIndex=1,Visible=false,Parent=panel})
+   passThrough(label)
+   track(function() if image then image:Destroy() end end)
+  end)
+  if not ok then warn('[Mercury] parallel workers unavailable, using the simple notification: '..tostring(err));ready=false end
+ end
+ if Layout.performance~='Low' then task.spawn(boot) end
+ local function finish()
+  local cb=m and m.onDone;m=nil;if label then label.Visible=false end;if cb then cb() end
+ end
+ track(RunService.Heartbeat:Connect(function()
+  if not m or not ready then return end
+  if not root.Visible then local held=m.hold;finish();if held then toast.Visible=false end;return end
+  local now=os.clock()
+  local size=panelPixels();local w,h=size.X,size.Y;local r=contourRadius()
+  local g=m.g;local dir=m.onRight and 1 or -1;local ex=m.onRight and w or 0
+  local ox=m.onRight and floor((ex-30)/2)*2 or floor((ex-g.gap-g.cw-30)/2)*2
+  local oy=floor((g.cy-H_/2)/2)*2
+  local cardScale,usePos=0,true
+  if m.opening then
+   if m.hold then
+    if now-(m.drawn or 0)<.05 then return end
+    m.drawn=now;cardScale,usePos=1,false
+   else
+    local total=Layout.transitionTime or 1.05
+    if not m.settleAt and simState.got and not simState.neckOpen and now>=m.openClock+total-.3 then m.settleAt=now end
+    local settle=m.settleAt and clamp((now-m.settleAt)/.3,0,1) or 0
+    if settle>=1 then
+     m.hold=true;m.drawn=now;simChannel:Fire('simStop');cardScale,usePos=1,false
+     local cb=m.onDone;m.onDone=nil;if cb then cb() end
+    else
+     cardScale=settle>0 and (.9+.1*settle) or 0
+     simChannel:Fire('tick')
     end
    end
-  end
-  for i=1,#xs do vx[i]=(xs[i]-px[i])/dt;vy[i]=(ys[i]-py[i])/dt end
- end
- local function simFrame(sim)
-  sim.t+=1/60
-  local g=sim.g
-  if sim.mode=='fill' then
-   if sim.t<.18 then if rand(0,1)<.6 then inject(sim,1,1.4,1.5) end
-   elseif sim.injected<FL.count then inject(sim,min(10,FL.count-sim.injected),FL.rush,4.2)
-   elseif sim.snapAt<0 then sim.snapAt=sim.t+.12 end
-   if sim.snapAt>0 and sim.t>=sim.snapAt and sim.neckOpen then
-    sim.neckOpen=false
-    for i=1,#sim.xs do if sim.xs[i]<g.gap+2 then sim.vx[i]=-3.3 end end
+  else
+   if now<m.start then
+    if now-(m.drawn or 0)<.05 then return end
+    m.drawn=now;cardScale,usePos=1,false
+   else
+    if not m.started then m.started=now;simState.got=false;simChannel:Fire('simClose',g) end
+    simChannel:Fire('tick')
+    if simState.got and simState.n==0 and now-m.started>.15 then finish();return end
    end
-   if not sim.neckOpen then for i=1,#sim.xs do if sim.xs[i]<g.gap-.5 then sim.vx[i]=min(sim.vx[i],-2.8) end end end
   end
-  substep(sim,.5);substep(sim,.5)
- end
- -- a full card's worth of liquid at rest (hex packing), for the drain
- local function fullSim(g)
-  local sim=newSim(g)
-  local d=6.6;local row=0
-  local y=g.cy-g.ch/2+3.3
-  while y<g.cy+g.ch/2-2 do
-   local x=g.gap+3.3+(row%2)*d/2
-   while x<g.gap+g.cw-2 do
-    if sdRound(x,y,g.gap,g.cy-g.ch/2,g.gap+g.cw,g.cy+g.ch/2,g.rad)<-2.5 then
-     local i=#sim.xs+1;sim.xs[i]=x;sim.ys[i]=y;sim.vx[i]=0;sim.vy[i]=0;sim.px[i]=x;sim.py[i]=y
-    end
-    x+=d
-   end
-   y+=d*.866;row+=1
-  end
-  sim.injected=FL.count;sim.mode='drain';sim.neckOpen=true;sim.neckH=g.ch*.32;sim.suck=true;sim.absorb=true
-  return sim
- end
- -- render: panel outline + the card polygon (while settling/held) + one blob per particle
- local function draw(w,h,r,sim,cardScale)
-  local g=m.g;local dir=m.onRight and 1 or -1
-  local ex=m.onRight and w or 0
-  local function X(s) return ex+dir*s end
-  local ox=m.onRight and floor((ex-30)/S)*S or floor((ex-g.gap-g.cw-30)/S)*S
-  local oy=floor((g.cy-WH/2)/S)*S
-  local per=perimeter(w,h,r);local pts={}
-  for i=1,120 do local x,y=outlineAt((i-1)/120*per,w,h,r);pts[i]={x-ox,y-oy} end
-  if cardScale and cardScale>0 then
-   local poly={};rrect(X(g.gap+g.cw/2)-ox,g.cy-oy,g.cw*cardScale,g.ch*cardScale,g.rad*cardScale,poly)
-   pts[#pts+1]=pts[1];for _,pt in ipairs(poly) do pts[#pts+1]=pt end;pts[#pts+1]=poly[1]
-  end
-  local bodies={}
-  if sim then for i=1,#sim.xs do bodies[i]={X(sim.xs[i])-ox,sim.ys[i]-oy,FL.blob} end end
-  use(surface);clearRow=nil;postProcess=fadeBorders
-  material.compose=function() return shared.material.sheetAt(-ox,-oy) end
-  render(pts,bodies,nil)
-  postProcess=nil
-  label.Position=UDim2.fromOffset(ox/k,oy/k);label.Visible=true
- end
- local function stepFor(sim)
-  -- fixed 60 Hz steps from real time, at most 2 per run so it never stalls
-  local due=floor((clock-m.simClock)*60)
-  if due>4 then m.simClock=clock-4/60;due=4 end
-  for _=1,due do simFrame(sim);m.simClock+=1/60 end
- end
+  cropMaterial(ox,oy)
+  frameId+=1
+  local entry=pending[frameId] or {};entry.ox,entry.oy=ox,oy;pending[frameId]=entry
+  drawChannel:Fire('tick',frameId,ox,oy,w,h,r,dir,ex,g,cardScale,usePos and simState.buf or nil,usePos and simState.n or 0,crop)
+ end))
  toastMorph={
+  ready=function() return ready end,
   open=function(onRight,onDone)
-   ensure();label.ImageTransparency=0
    local h=panelPixels().Y
-   local g=geometry(h)
-   m={opening=true,onRight=onRight,onDone=onDone,g=g,sim=newSim(g),simClock=clock,openClock=clock}
+   simState.got=false;simState.n=0;simState.neckOpen=true
+   m={opening=true,onRight=onRight,onDone=onDone,g=geometry(h),openClock=os.clock()}
+   simChannel:Fire('simOpen',m.g)
   end,
   close=function(onRight,onDone)
-   ensure();label.ImageTransparency=0
    local h=panelPixels().Y
-   local g=geometry(h)
-   m={opening=false,onRight=onRight,onDone=onDone,g=g,start=clock+.18}
+   m={opening=false,onRight=onRight,onDone=onDone,g=geometry(h),start=os.clock()+.18}
   end,
  }
- jobs[#jobs+1]={name='toast',interval=0,elapsed=0,priority=true,
-  active=function() return m~=nil and root.Visible end,
-  reset=function()
-   -- interrupted (panel hidden/minimized): finish immediately
-   if m then local cb=m.onDone;local held=m.hold;m=nil;if label then label.Visible=false end;if held then toast.Visible=false end;if cb then cb() end end
-  end,
-  run=function()
-   if not m then return end
-   local size=panelPixels();local w,h=size.X,size.Y;local r=contourRadius()
-   if m.opening then
-    if m.hold then
-     if clock-(m.drawn or 0)>=.05 then m.drawn=clock;draw(w,h,r,nil,1) end
-     return
-    end
-    local sim=m.sim
-    stepFor(sim)
-    -- settle once the slosh has died down: the clean card grows in under the liquid
-    local total=Layout.transitionTime or 1.05
-    if not sim.neckOpen and clock>=m.openClock+total-.3 and not m.settleAt then m.settleAt=clock end
-    local settle=m.settleAt and clamp((clock-m.settleAt)/.3,0,1) or 0
-    if settle>=1 then
-     draw(w,h,r,nil,1)
-     m.hold=true;m.drawn=clock;m.sim=nil
-     local cb=m.onDone;m.onDone=nil
-     if cb then cb() end
-    else
-     draw(w,h,r,sim,settle>0 and (.9+.1*settle) or nil)
-    end
-   else
-    if clock<m.start then draw(w,h,r,nil,1) return end
-    if not m.sim then m.sim=fullSim(m.g);m.simClock=clock end
-    stepFor(m.sim)
-    if #m.sim.xs==0 then
-     local cb=m.onDone;m=nil;label.Visible=false
-     if cb then cb() end
-    else draw(w,h,r,m.sim,nil) end
-   end
-  end}
 end
 
 -- Resize grip: a wide, softly tapered boomerang hugging the outside of the
@@ -5405,23 +5498,10 @@ liquid.service=function(dt)
  -- Jobs take turns (round robin); when one finishes inside this frame's slice
  -- the next due job starts in the same frame, so each redraws as often as the
  -- budget allows.
- -- Each frame: the priority job (notification morph) runs first in its own capped
- -- slice; afterwards the other pieces still get a fresh, normal slice, so nothing
- -- else pauses while a notification animates.
- local sliceStart=pacing.frameStart
  for _=1,#jobs do
   if not runner then
    local count=#jobs
-   -- a due priority job (the notification morph) goes first once per frame, so it
-   -- redraws every frame instead of waiting its turn behind the other pieces
-   for _,job in ipairs(jobs) do
-    if job.priority and wasActive[job] and job.run and job.elapsed>=job.interval and job.ranAt~=pacing.frameStart then
-     local delta=job.elapsed;job.elapsed=0;job.ranAt=pacing.frameStart
-     runner=coroutine.create(job.run);runnerArgs={delta};runnerJob=job
-     break
-    end
-   end
-   if not runner then for step=1,count do
+   for step=1,count do
     local index=(nextJob+step-2)%count+1
     local job=jobs[index]
     if wasActive[job] and job.run and job.elapsed>=job.interval then
@@ -5429,20 +5509,17 @@ liquid.service=function(dt)
      runner=coroutine.create(job.run);runnerArgs={delta};runnerJob=job
      break
     end
-   end end
+   end
   end
   if not runner then break end
-  -- the priority job gets an extra slice on top of the shared budget
-  local isPriority=runnerJob and runnerJob.priority
-  pacing.budget=isPriority and .006 or pacing.limit;pacing.start=sliceStart
+  pacing.budget=pacing.limit;pacing.start=pacing.frameStart
   local args=runnerArgs;runnerArgs=nil
   local ok,err
   if args then ok,err=coroutine.resume(runner,args[1]) else ok,err=coroutine.resume(runner) end
   pacing.budget=nil
   if not ok then runner=nil;runnerJob=nil;error(err,0) end
   if coroutine.status(runner)=='dead' then runner=nil;runnerJob=nil else break end
-  if isPriority then sliceStart=os.clock() end
-  if os.clock()-sliceStart>pacing.limit then break end
+  if os.clock()-pacing.frameStart>pacing.limit then break end
  end
 end
 track(function() stopped=true;liquid.service=nil end)
@@ -5599,7 +5676,8 @@ local function showToast(title: string, content: string?, duration: number?, kin
     -- Liquid morph: the card grows out of the panel edge as a blob, then the real
     -- notification fades in over it; on the way out it melts back into the panel.
     local morph = Resize.liquidToast
-    if morph and Layout.performance ~= "Low" and not Resize.minimized then
+    -- parallel-worker liquid when the executor supports actors; otherwise the plain slide-in
+    if morph and morph.ready() and Layout.performance ~= "Low" and not Resize.minimized then
         playFade(toastFade, false, 0)
         toast.Visible = false
         setToastChrome(false)
