@@ -296,10 +296,17 @@ local function addColorPicker(container, config)
     assert(typeof(config) == "table", "ColorPicker needs an options table")
     -- One glass card: the header row expands into the picker body (no separate popup).
     local headerHeight = Layout.rowHeight
-    local INSET, KNOB, TRACK_H, HIT_H = 14, 18, 14, 26
+    -- Compact layout: the shade square (same height as before, narrower) with the
+    -- three sliders standing vertically to its right (H / B / A), and only the HEX
+    -- row underneath.
+    local INSET, KNOB, TRACK_W, HIT_W = 14, 18, 14, 26
     local SHADE_Y, SHADE_H = 2, 160
-    local HUE_Y, BRIGHT_Y, ALPHA_Y, HEX_Y, HEX_H = 176, 222, 268, 316, 36
-    local bodyHeight = HEX_Y + HEX_H + 16
+    local COL_GAP, SIDE_GAP = 12, 14
+    local SLIDERS_W = SIDE_GAP + TRACK_W * 3 + COL_GAP * 2
+    local TRACK_LEN = SHADE_H - 20          -- room for the caption under each track
+    local HEX_Y, HEX_H = SHADE_Y + SHADE_H + 12, 36
+    local CAPTION = Layout.captionTextSize or 12
+    local bodyHeight = HEX_Y + HEX_H + 14
     local openHeight = headerHeight + bodyHeight
     local radius = UDim.new(0, headerHeight / 2)
 
@@ -347,7 +354,7 @@ local function addColorPicker(container, config)
         Visible = false, ZIndex = 3, Parent = card})
 
     local shade = create("Frame", {Name = "Shade", BorderSizePixel = 0, Position = UDim2.fromOffset(0, SHADE_Y),
-        Size = UDim2.new(1, 0, 0, SHADE_H), ZIndex = 3, Parent = body})
+        Size = UDim2.new(1, -SLIDERS_W, 0, SHADE_H), ZIndex = 3, Parent = body})
     corner(shade, 14)
     local white = create("Frame", {BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0,
         Size = UDim2.fromScale(1, 1), ZIndex = 4, Parent = shade})
@@ -384,69 +391,75 @@ local function addColorPicker(container, config)
     end
     local shadeKnobHolder, shadeKnob = makeKnob(shade, 16, 7)
 
-    local function caption(text, y)
+    local function caption(text, x, y, w, align)
         return create("TextLabel", {Name = text .. "Label", BackgroundTransparency = 1,
-            Position = UDim2.fromOffset(2, y), Size = UDim2.new(1, -4, 0, 13),
-            FontFace = font(Enum.FontWeight.SemiBold), Text = text, TextSize = 10,
-            TextColor3 = Theme.mistDim, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 4, Parent = body})
+            Position = UDim2.new(1, x, 0, y), Size = UDim2.fromOffset(w, CAPTION + 2),
+            FontFace = font(Enum.FontWeight.SemiBold), Text = text, TextSize = CAPTION,
+            TextColor3 = Theme.mistDim, TextXAlignment = align or Enum.TextXAlignment.Center, ZIndex = 4, Parent = body})
     end
-    local function track(text, y)
-        caption(text, y)
+    -- vertical track number `column` (1..3), right of the square
+    local function track(text, column)
+        local x = -SLIDERS_W + SIDE_GAP + (column - 1) * (TRACK_W + COL_GAP)
+        caption(text, x - 6, SHADE_Y + TRACK_LEN + 4, TRACK_W + 12)
         local bar = create("Frame", {Name = text .. "Track", BorderSizePixel = 0,
-            Position = UDim2.fromOffset(0, y + 18), Size = UDim2.new(1, 0, 0, TRACK_H), ZIndex = 4, Parent = body})
+            Position = UDim2.new(1, x, 0, SHADE_Y), Size = UDim2.fromOffset(TRACK_W, TRACK_LEN), ZIndex = 4, Parent = body})
         corner(bar, UDim.new(0.5, 0))
         create("UIStroke", {Color = Color3.new(1, 1, 1), Transparency = 0.84, Thickness = 1, Parent = bar})
         local hit = create("TextButton", {Name = "Input", Text = "", AutoButtonColor = false, BackgroundTransparency = 1,
-            AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.fromScale(0, 0.5), Size = UDim2.new(1, 0, 0, HIT_H),
+            AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.fromScale(0.5, 0), Size = UDim2.new(0, HIT_W, 1, 0),
             ZIndex = 8, Parent = bar})
         local holder, knob = makeKnob(bar, KNOB, 6)
         return bar, hit, holder, knob
     end
     -- knob travels inside the track so it never hangs off the rounded ends
     local function along(fraction)
-        return UDim2.new(fraction, KNOB / 2 - KNOB * fraction, 0.5, 0)
+        return UDim2.new(0.5, 0, fraction, KNOB / 2 - KNOB * fraction)
     end
 
-    local hueBar, hueHit, hueKnobHolder, hueKnob = track("HUE", HUE_Y)
+    local hueBar, hueHit, hueKnobHolder, hueKnob = track("H", 1)
     local hueKeys = {}
     for i = 0, 6 do
         table.insert(hueKeys, ColorSequenceKeypoint.new(i / 6, Color3.fromHSV((i % 6) / 6, 1, 1)))
     end
-    create("UIGradient", {Color = ColorSequence.new(hueKeys), Parent = hueBar})
+    create("UIGradient", {Rotation = 90, Color = ColorSequence.new(hueKeys), Parent = hueBar})
     hueBar.BackgroundColor3 = Color3.new(1, 1, 1)
 
-    local brightBar, brightHit, brightKnobHolder, brightKnob = track("BRIGHTNESS", BRIGHT_Y)
+    -- brightness, top to bottom: white, the pure colour (middle), black
+    local brightBar, brightHit, brightKnobHolder, brightKnob = track("B", 2)
     brightBar.BackgroundColor3 = Color3.new(1, 1, 1)
-    local brightGradient = create("UIGradient", {Parent = brightBar})
+    local brightGradient = create("UIGradient", {Rotation = 90, Parent = brightBar})
 
-    local alphaBar, alphaHit, alphaKnobHolder, alphaKnob = track("TRANSPARENCY", ALPHA_Y)
+    -- transparency, top to bottom: opaque to clear
+    local alphaBar, alphaHit, alphaKnobHolder, alphaKnob = track("A", 3)
     alphaBar.BackgroundColor3 = Theme.tint
     alphaBar.BackgroundTransparency = 0.25
     local alphaFill = create("Frame", {Name = "Fill", BorderSizePixel = 0, Size = UDim2.fromScale(1, 1),
         ZIndex = 5, Parent = alphaBar})
     corner(alphaFill, UDim.new(0.5, 0))
-    create("UIGradient", {Transparency = NumberSequence.new(0, 1), Parent = alphaFill})
-    local alphaValue = create("TextLabel", {Name = "TransparencyValue", BackgroundTransparency = 1,
-        Position = UDim2.fromOffset(2, ALPHA_Y), Size = UDim2.new(1, -4, 0, 13),
-        FontFace = font(Enum.FontWeight.SemiBold), TextSize = 10, TextColor3 = Theme.mist,
-        TextXAlignment = Enum.TextXAlignment.Right, ZIndex = 4, Parent = body})
+    create("UIGradient", {Rotation = 90, Transparency = NumberSequence.new(0, 1), Parent = alphaFill})
 
-    local hexCaption = caption("HEX", HEX_Y)
-    hexCaption.Size = UDim2.fromOffset(34, HEX_H)
-    hexCaption.TextYAlignment = Enum.TextYAlignment.Center
+    -- HEX row (full width under the square): caption, field, transparency value
+    local hexCaption = create("TextLabel", {Name = "HEXLabel", BackgroundTransparency = 1,
+        Position = UDim2.fromOffset(2, HEX_Y), Size = UDim2.fromOffset(38, HEX_H),
+        FontFace = font(Enum.FontWeight.SemiBold), Text = "HEX", TextSize = CAPTION,
+        TextColor3 = Theme.mistDim, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 4, Parent = body})
     local hexHolder = create("Frame", {Name = "HexField", BackgroundColor3 = Theme.tint, BackgroundTransparency = 0.45,
-        BorderSizePixel = 0, Position = UDim2.fromOffset(42, HEX_Y), Size = UDim2.new(1, -42, 0, HEX_H),
+        BorderSizePixel = 0, Position = UDim2.fromOffset(44, HEX_Y), Size = UDim2.new(1, -44 - 58, 0, HEX_H),
         ZIndex = 4, Parent = body})
     corner(hexHolder, UDim.new(0.5, 0))
     local hexStroke = create("UIStroke", {Color = Color3.new(1, 1, 1), Transparency = 0.86, Thickness = 1, Parent = hexHolder})
     create("TextLabel", {BackgroundTransparency = 1, Position = UDim2.fromOffset(14, 0), Size = UDim2.fromOffset(12, HEX_H),
-        FontFace = font(Enum.FontWeight.SemiBold), Text = "#", TextSize = 15, TextColor3 = Theme.mistDim,
+        FontFace = font(Enum.FontWeight.SemiBold), Text = "#", TextSize = 16, TextColor3 = Theme.mistDim,
         ZIndex = 5, Parent = hexHolder})
     local hexBox = create("TextBox", {Name = "HexInput", BackgroundTransparency = 1,
         Position = UDim2.fromOffset(30, 0), Size = UDim2.new(1, -44, 1, 0),
         FontFace = font(Enum.FontWeight.SemiBold), Text = "", PlaceholderText = "RRGGBB",
-        TextSize = 14, TextColor3 = Theme.mist, PlaceholderColor3 = Theme.mistDim,
+        TextSize = 15, TextColor3 = Theme.mist, PlaceholderColor3 = Theme.mistDim,
         TextXAlignment = Enum.TextXAlignment.Left, ClearTextOnFocus = false, ZIndex = 5, Parent = hexHolder})
+    local alphaValue = create("TextLabel", {Name = "TransparencyValue", BackgroundTransparency = 1,
+        Position = UDim2.new(1, -52, 0, HEX_Y), Size = UDim2.fromOffset(50, HEX_H),
+        FontFace = font(Enum.FontWeight.SemiBold), TextSize = CAPTION + 1, TextColor3 = Theme.mist,
+        TextXAlignment = Enum.TextXAlignment.Right, ZIndex = 4, Parent = body})
 
     -- State -----------------------------------------------------------------
     local obj = controlBase("ColorPicker", frame, config.CurrentValue or Color3.new(1, 1, 1), config.Callback, config.Flag)
@@ -552,8 +565,8 @@ local function addColorPicker(container, config)
             local bar = if kind == "hue" then hueBar elseif kind == "brightness" then brightBar else alphaBar
             local holder = if kind == "hue" then hueKnobHolder elseif kind == "brightness" then brightKnobHolder else alphaKnobHolder
             -- knob centres stop KNOB/2 px in from each end; measure that in screen px (UIScale aware)
-            local inset = holder.AbsoluteSize.X * (KNOB / 2) / (KNOB + 4)
-            local fraction = math.clamp((pointer.X - bar.AbsolutePosition.X - inset) / math.max(1, bar.AbsoluteSize.X - inset * 2), 0, 1)
+            local inset = holder.AbsoluteSize.Y * (KNOB / 2) / (KNOB + 4)
+            local fraction = math.clamp((pointer.Y - bar.AbsolutePosition.Y - inset) / math.max(1, bar.AbsoluteSize.Y - inset * 2), 0, 1)
             if kind == "transparency" then obj:SetTransparency(math.round(fraction * 100) / 100); return end
             if kind == "hue" then hue = fraction else
                 brightness = fraction * 2 - 1

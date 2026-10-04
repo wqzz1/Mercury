@@ -3511,6 +3511,10 @@ liquid.service=function(dt)
  -- Jobs take turns (round robin); when one finishes inside this frame's slice
  -- the next due job starts in the same frame, so each redraws as often as the
  -- budget allows.
+ -- Each frame: the priority job (notification morph) runs first in its own capped
+ -- slice; afterwards the other pieces still get a fresh, normal slice, so nothing
+ -- else pauses while a notification animates.
+ local sliceStart=pacing.frameStart
  for _=1,#jobs do
   if not runner then
    local count=#jobs
@@ -3535,14 +3539,16 @@ liquid.service=function(dt)
   end
   if not runner then break end
   -- the priority job gets an extra slice on top of the shared budget
-  pacing.budget=pacing.limit+(runnerJob and runnerJob.priority and .006 or 0);pacing.start=pacing.frameStart
+  local isPriority=runnerJob and runnerJob.priority
+  pacing.budget=isPriority and .006 or pacing.limit;pacing.start=sliceStart
   local args=runnerArgs;runnerArgs=nil
   local ok,err
   if args then ok,err=coroutine.resume(runner,args[1]) else ok,err=coroutine.resume(runner) end
   pacing.budget=nil
   if not ok then runner=nil;runnerJob=nil;error(err,0) end
   if coroutine.status(runner)=='dead' then runner=nil;runnerJob=nil else break end
-  if os.clock()-pacing.frameStart>pacing.limit then break end
+  if isPriority then sliceStart=os.clock() end
+  if os.clock()-sliceStart>pacing.limit then break end
  end
 end
 track(function() stopped=true;liquid.service=nil end)

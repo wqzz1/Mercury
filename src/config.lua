@@ -50,6 +50,9 @@ local Layout = {
     -- matches the minimize morph (~0.85-1.25 s, 1.05 on average). New animated
     -- elements use this so everything opens and closes at the same pace.
     transitionTime = 1.05,
+    -- Small labels inside controls (slider captions, HEX, values): one size
+    -- under the 13 px section titles, two under the 14 px row text.
+    captionTextSize = 12,
 }
 
 -- Tapered divider: many stacked lines, each narrower and thicker, so the
