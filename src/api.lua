@@ -643,6 +643,8 @@ function window:CreateTab(name, icon)
         holder.AutomaticSize = Enum.AutomaticSize.Y
         -- Heading: TITLE ─────── with half a tapered divider after the title, thick
         -- and glowing next to the text and thinning out toward the right edge.
+        -- rest tint (multiplied with the glint gradient); hover brightens it to white
+        local HEAD_REST = Color3.new(0.95, 0.95, 0.95)
         local HEAD_H, RULE_GAP, RULE_LENGTH, RULE_NUDGE = 24, 16, 170, 1.5
         -- title lines up with the row labels inside the glass rows, not the rows' edge
         local TITLE_X = Layout.padX + 20
@@ -650,7 +652,7 @@ function window:CreateTab(name, icon)
             -- sized to the text itself (not the row) so the glint's band crosses the letters
             Position = UDim2.fromOffset(TITLE_X, 0), Size = UDim2.fromOffset(0, HEAD_H), AutomaticSize = Enum.AutomaticSize.X,
             FontFace = font(Enum.FontWeight.Bold), Text = string.upper(title),
-            TextColor3 = Color3.new(1, 1, 1), TextTransparency = 0.18, TextSize = 13, -- white: the glint UIGradient supplies the mist tint (gradients multiply the text colour)
+            TextColor3 = HEAD_REST, TextTransparency = 0, TextSize = 13, -- white: the glint UIGradient supplies the mist tint (gradients multiply the text colour)
             TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Center, Parent = holder})
         local mark = create("Frame", {Name = "Rule", BackgroundTransparency = 1,
             Position = UDim2.fromOffset(Layout.padX, HEAD_H / 2 - 2), Size = UDim2.new(1, -Layout.padX * 2, 0, 4), Parent = holder})
@@ -680,17 +682,17 @@ function window:CreateTab(name, icon)
             else return 1 - smooth((x - 0.57) / 0.06) end
         end
         for _, x in {0, 0.08, 0.14, 0.2, 0.26, 0.32, 0.37, 0.40, 0.425, 0.45, 0.57, 0.6, 0.63, 1} do
-            table.insert(glintKeys, ColorSequenceKeypoint.new(x, Theme.mist:Lerp(Color3.new(1, 1, 1), glintAt(x))))
+            table.insert(glintKeys, ColorSequenceKeypoint.new(x, Theme.mist:Lerp(Color3.fromRGB(26, 20, 42), 0.13):Lerp(Color3.new(1, 1, 1), glintAt(x))))
         end
         local glint = create("UIGradient", {Rotation = 20, Offset = Vector2.new(-1.2, 0),
             Color = ColorSequence.new(glintKeys), Parent = heading})
         task.spawn(function()
             local glintRng = Random.new()
-            task.wait(glintRng:NextNumber(1.5, 4))
+            task.wait(glintRng:NextNumber(0.4, 1.2))
             while holder.Parent and not state.destroyed do
                 glint.Offset = Vector2.new(-1.2, 0)
                 tween(glint, 2.4, {Offset = Vector2.new(1.2, 0)}, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
-                task.wait(2.4 + glintRng:NextNumber(6, 10))
+                task.wait(2.4 + glintRng:NextNumber(3, 5))
             end
         end)
         -- The rule is the right half of the regular divider: same layer count, taper,
@@ -748,7 +750,7 @@ function window:CreateTab(name, icon)
         end
         function section:Toggle() return self:SetCollapsed(not self.Collapsed) end
         local function setHover(on)
-            tween(heading, 0.18, {TextTransparency = if on then 0 else 0.18})
+            tween(heading, 0.18, {TextColor3 = if on then Color3.new(1, 1, 1) else HEAD_REST})
             for _, layer in glowLayers do
                 tween(layer.stroke, 0.18, {Transparency = if on then layer.base - (1 - layer.base) * 0.6 else layer.base})
             end

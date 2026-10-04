@@ -1390,14 +1390,15 @@ end
 do
     local footerDivider = taperedDivider(panel, FOOTER_Y - Layout.gap / 2)
     local y = footerDivider.Position.Y.Offset
-    footerDivider.Position = UDim2.new(footerDivider.Position.X, UDim.new(1, y - PANEL_HEIGHT))
+    -- moved down with the footer items (they now sit CORNER_INSET from the bottom)
+    footerDivider.Position = UDim2.new(footerDivider.Position.X, UDim.new(1, y - PANEL_HEIGHT + Layout.bottomPad - CORNER_INSET))
 end
 
 create("TextLabel", {
     Name = "Credit",
     BackgroundTransparency = 1,
     AnchorPoint = Vector2.new(0, 0.5),
-    Position = UDim2.new(0, CORNER_INSET + 2, 1, FOOTER_Y + Layout.footerHeight / 2 - PANEL_HEIGHT),
+    Position = UDim2.new(0, CORNER_INSET + 2, 1, -Layout.footerHeight / 2 - CORNER_INSET), -- same gap from the bottom as from the side
     Size = UDim2.fromOffset(150, 16),
     FontFace = font(Enum.FontWeight.Medium),
     Text = options.Footer or "made by ego",
@@ -1418,7 +1419,7 @@ local biolinkButton: TextButton = create("TextButton", {
     BackgroundColor3 = Theme.mist,
     BackgroundTransparency = 0.93,
     AnchorPoint = Vector2.new(1, 0.5),
-    Position = UDim2.new(1, -CORNER_INSET, 1, FOOTER_Y + Layout.footerHeight / 2 - PANEL_HEIGHT),
+    Position = UDim2.new(1, -CORNER_INSET, 1, -Layout.footerHeight / 2 - CORNER_INSET), -- same gap from the bottom as from the side
     AutomaticSize = Enum.AutomaticSize.X,
     Size = UDim2.fromOffset(0, Layout.footerHeight),
     ZIndex = 3,
@@ -4606,6 +4607,110 @@ do
    end
   end
  end
+
+ -- Drips sit behind the controls; the glass rows are ~94% transparent, so a drop
+ -- showed straight through them. Where a visible control (row, card, pill, the
+ -- Biolink button) covers the drip, the drip is frosted instead: blurred and
+ -- slightly faded, following each control's rounded corners with a soft edge, so
+ -- it reads as liquid passing BEHIND frosted glass.
+ local occl,occlAt={},-1
+ local function occluders()
+  if clock-occlAt<.4 then return occl end
+  occlAt=clock;table.clear(occl)
+  local pp=panel.AbsolutePosition
+  local pages=panel:FindFirstChild('Pages')
+  local function add(o,cx0,cy0,cx1,cy1)
+   local a,s=o.AbsolutePosition-pp,o.AbsoluteSize
+   if s.X<4 or s.Y<4 then return end
+   local x0,y0,x1,y1=max(a.X,cx0),max(a.Y,cy0),min(a.X+s.X,cx1),min(a.Y+s.Y,cy1)
+   if x1<=x0 or y1<=y0 then return end
+   local c=o:FindFirstChildWhichIsA('UICorner');local rad=0
+   if c then rad=c.CornerRadius.Scale*min(s.X,s.Y)+c.CornerRadius.Offset*k end
+   occl[#occl+1]={a.X,a.Y,a.X+s.X,a.Y+s.Y,min(rad,s.X/2,s.Y/2),x0,y0,x1,y1}
+  end
+  if pages then
+   local a,s=pages.AbsolutePosition-pp,pages.AbsoluteSize
+   for _,o in ipairs(pages:GetDescendants()) do
+    if o:IsA('GuiObject') and o.Visible and o.BackgroundTransparency<.99 then
+     local shown=true;local q=o.Parent
+     while q and q~=pages do if q:IsA('GuiObject') and not q.Visible then shown=false;break end;q=q.Parent end
+     if shown then add(o,a.X,a.Y,a.X+s.X,a.Y+s.Y) end
+    end
+   end
+  end
+  local bio=panel:FindFirstChild('Biolink')
+  if bio and bio.Visible then add(bio,-math.huge,-math.huge,math.huge,math.huge) end
+  return occl
+ end
+ local FROST_R,FROST_ALPHA=4,.72   -- blur radius (px) and opacity kept behind glass
+ local function occlude(ox,oy)
+  local list=occluders();if #list==0 then return end
+  local readu32,writeu32=buffer.readu32,buffer.writeu32
+  for _,o in ipairs(list) do
+   local x0,y0,x1,y1=max(0,floor(o[6]-ox)),max(0,floor(o[7]-oy)),min(OW,ceil(o[8]-ox)),min(OH,ceil(o[9]-oy))
+   if x1>x0 and y1>y0 then
+    -- work area: the covered box plus the blur's reach, premultiplied channels
+    local bx0,by0,bx1,by1=max(0,x0-FROST_R),max(0,y0-FROST_R),min(OW,x1+FROST_R),min(OH,y1+FROST_R)
+    local bw,bh=bx1-bx0,by1-by0;local n=bw*bh
+    local A,Rc,Gc,Bc=table.create(n,0),table.create(n,0),table.create(n,0),table.create(n,0)
+    local any=false
+    for y=by0,by1-1 do local row=(y-by0)*bw
+     for x=bx0,bx1-1 do local v=readu32(pixels,(y*OW+x)*4);local al=floor(v/16777216)
+      if al>0 then any=true;local i=row+(x-bx0)+1;A[i]=al;Rc[i]=(v%256)*al;Gc[i]=(floor(v/256)%256)*al;Bc[i]=(floor(v/65536)%256)*al end
+     end
+    end
+    if any then
+     -- separable box blur, applied twice (close to a gaussian)
+     local function pass(src,dst,horizontal)
+      local len,lines=horizontal and bw or bh,horizontal and bh or bw
+      local inv=1/(2*FROST_R+1)
+      for l=0,lines-1 do
+       if l%16==15 then pace() end
+       local function idx(p) if horizontal then return l*bw+p+1 else return p*bw+l+1 end end
+       local sum=0
+       for p=-FROST_R,FROST_R do sum+=src[idx(clamp(p,0,len-1))] end
+       for p=0,len-1 do
+        dst[idx(p)]=sum*inv
+        sum+=src[idx(min(p+FROST_R+1,len-1))]-src[idx(max(p-FROST_R,0))]
+       end
+      end
+     end
+     local tmp=table.create(n,0)
+     for _,ch in ipairs({A,Rc,Gc,Bc}) do
+      local work=table.create(n,0);table.move(ch,1,n,1,work)
+      pass(work,tmp,true);pass(tmp,work,false);pass(work,tmp,true);pass(tmp,work,false)
+      ch.blur=work
+     end
+     local L,T,R,B,rad=o[1]-ox,o[2]-oy,o[3]-ox,o[4]-oy,o[5]
+     for y=y0,y1-1 do
+      if (y-y0)%16==15 then pace() end
+      local py=y+.5;local dy=max(T+rad-py,py-(B-rad))
+      for x=x0,x1-1 do
+       local px=x+.5;local dx=max(L+rad-px,px-(R-rad))
+       local qx,qy=max(dx,0),max(dy,0)
+       local d=sqrt(qx*qx+qy*qy)+min(max(dx,dy),0)-rad
+       local cover=clamp(.5-d,0,1)
+       if cover>0 then
+        local i=(y-by0)*bw+(x-bx0)+1
+        local ba=A.blur[i]*FROST_ALPHA
+        -- mix original and frosted (premultiplied), then un-premultiply
+        local fa=A[i]+(ba-A[i])*cover
+        if fa>.5 then
+         local s=FROST_ALPHA
+         local fr=Rc[i]+(Rc.blur[i]*s-Rc[i])*cover
+         local fg=Gc[i]+(Gc.blur[i]*s-Gc[i])*cover
+         local fb=Bc[i]+(Bc.blur[i]*s-Bc[i])*cover
+         writeu32(pixels,(y*OW+x)*4,min(255,floor(fr/fa+.5))+min(255,floor(fg/fa+.5))*256+min(255,floor(fb/fa+.5))*65536+min(255,floor(fa+.5))*16777216)
+        else
+         writeu32(pixels,(y*OW+x)*4,0)
+        end
+       end
+      end
+     end
+    end
+   end
+  end
+ end
  local function updateDrip(w,h,r)
   local tb=tabBar
   if not (tb and tb.Parent and tb.Visible and tb.AbsoluteSize.X>0) then return end
@@ -4628,7 +4733,7 @@ do
     local ox,oy=floor((x-WINDOW/2)/S)*S,floor((y-WINDOW/2)/S)*S
     local bodies={{x-ox,y-oy,R},{x-ox,y-tail-oy,R*.55}}
     use(item.surface);clearRow=nil
-    postProcess=function() tintCircles(bodies,DRIP_TINT) end
+    postProcess=function() tintCircles(bodies,DRIP_TINT);occlude(ox,oy) end
     material.compose=function() return shared.material.sheetAt(-ox,-oy) end
     render({},bodies,nil)
     postProcess=nil
@@ -4640,7 +4745,7 @@ do
    if not nextDrip then nextDrip=clock+rand(3,6) end
    if clock<nextDrip or hi<=lo then return end
    nextDrip=clock+rand(9,16)
-   drip={slot=slot(),start=clock,fx=rand(0,1),F=rand(.9,1.35),Sd=rand(.5,.72),R=rand(8.5,10.5),spread=rand(16,24)}
+   drip={slot=slot(),start=clock,fx=rand(0,1),F=rand(1.1,1.55),Sd=rand(.5,.72),R=rand(8.5,10.5),spread=rand(16,24)}
   end
   local item=drip.slot;local R=drip.R
   local t=clock-drip.start
@@ -4675,7 +4780,7 @@ do
   use(item.surface);clearRow=nil
   local top=floor((ey-oy)/S)+1
   local clipBytes=min(OH,top*S+2)*OW*4
-  postProcess=function() fill(pixels,0,0,clipBytes);tintCircles(local_,DRIP_TINT) end
+  postProcess=function() fill(pixels,0,0,clipBytes);tintCircles(local_,DRIP_TINT);occlude(ox,oy) end
   material.compose=function() return shared.material.sheetAt(-ox,-oy) end
   render(band,local_,nil)
   postProcess=nil
@@ -4728,7 +4833,7 @@ do
      if d.impact then
       local fadeTint=DRIP_TINT*(1-clamp(t/(d.bud+d.float*.5),0,1))
       local own={};for j,b in ipairs(bodies) do own[j]={b[1]-ox,b[2]-oy,b[3]} end
-      postProcess=function() feather();tintCircles(own,fadeTint) end
+      postProcess=function() feather();tintCircles(own,fadeTint);occlude(ox,oy) end
      end
      material.compose=function() return shared.material.sheetAt(-ox,-oy) end
      render(points,local_,{floor(x0/S),floor(y0/S),ceil(x1/S)-1,ceil(y1/S)-1})
@@ -6061,6 +6166,8 @@ function window:CreateTab(name, icon)
         holder.AutomaticSize = Enum.AutomaticSize.Y
         -- Heading: TITLE ─────── with half a tapered divider after the title, thick
         -- and glowing next to the text and thinning out toward the right edge.
+        -- rest tint (multiplied with the glint gradient); hover brightens it to white
+        local HEAD_REST = Color3.new(0.95, 0.95, 0.95)
         local HEAD_H, RULE_GAP, RULE_LENGTH, RULE_NUDGE = 24, 16, 170, 1.5
         -- title lines up with the row labels inside the glass rows, not the rows' edge
         local TITLE_X = Layout.padX + 20
@@ -6068,7 +6175,7 @@ function window:CreateTab(name, icon)
             -- sized to the text itself (not the row) so the glint's band crosses the letters
             Position = UDim2.fromOffset(TITLE_X, 0), Size = UDim2.fromOffset(0, HEAD_H), AutomaticSize = Enum.AutomaticSize.X,
             FontFace = font(Enum.FontWeight.Bold), Text = string.upper(title),
-            TextColor3 = Color3.new(1, 1, 1), TextTransparency = 0.18, TextSize = 13, -- white: the glint UIGradient supplies the mist tint (gradients multiply the text colour)
+            TextColor3 = HEAD_REST, TextTransparency = 0, TextSize = 13, -- white: the glint UIGradient supplies the mist tint (gradients multiply the text colour)
             TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Center, Parent = holder})
         local mark = create("Frame", {Name = "Rule", BackgroundTransparency = 1,
             Position = UDim2.fromOffset(Layout.padX, HEAD_H / 2 - 2), Size = UDim2.new(1, -Layout.padX * 2, 0, 4), Parent = holder})
@@ -6098,17 +6205,17 @@ function window:CreateTab(name, icon)
             else return 1 - smooth((x - 0.57) / 0.06) end
         end
         for _, x in {0, 0.08, 0.14, 0.2, 0.26, 0.32, 0.37, 0.40, 0.425, 0.45, 0.57, 0.6, 0.63, 1} do
-            table.insert(glintKeys, ColorSequenceKeypoint.new(x, Theme.mist:Lerp(Color3.new(1, 1, 1), glintAt(x))))
+            table.insert(glintKeys, ColorSequenceKeypoint.new(x, Theme.mist:Lerp(Color3.fromRGB(26, 20, 42), 0.13):Lerp(Color3.new(1, 1, 1), glintAt(x))))
         end
         local glint = create("UIGradient", {Rotation = 20, Offset = Vector2.new(-1.2, 0),
             Color = ColorSequence.new(glintKeys), Parent = heading})
         task.spawn(function()
             local glintRng = Random.new()
-            task.wait(glintRng:NextNumber(1.5, 4))
+            task.wait(glintRng:NextNumber(0.4, 1.2))
             while holder.Parent and not state.destroyed do
                 glint.Offset = Vector2.new(-1.2, 0)
                 tween(glint, 2.4, {Offset = Vector2.new(1.2, 0)}, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
-                task.wait(2.4 + glintRng:NextNumber(6, 10))
+                task.wait(2.4 + glintRng:NextNumber(3, 5))
             end
         end)
         -- The rule is the right half of the regular divider: same layer count, taper,
@@ -6166,7 +6273,7 @@ function window:CreateTab(name, icon)
         end
         function section:Toggle() return self:SetCollapsed(not self.Collapsed) end
         local function setHover(on)
-            tween(heading, 0.18, {TextTransparency = if on then 0 else 0.18})
+            tween(heading, 0.18, {TextColor3 = if on then Color3.new(1, 1, 1) else HEAD_REST})
             for _, layer in glowLayers do
                 tween(layer.stroke, 0.18, {Transparency = if on then layer.base - (1 - layer.base) * 0.6 else layer.base})
             end

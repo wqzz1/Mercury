@@ -490,14 +490,15 @@ end
 do
     local footerDivider = taperedDivider(panel, FOOTER_Y - Layout.gap / 2)
     local y = footerDivider.Position.Y.Offset
-    footerDivider.Position = UDim2.new(footerDivider.Position.X, UDim.new(1, y - PANEL_HEIGHT))
+    -- moved down with the footer items (they now sit CORNER_INSET from the bottom)
+    footerDivider.Position = UDim2.new(footerDivider.Position.X, UDim.new(1, y - PANEL_HEIGHT + Layout.bottomPad - CORNER_INSET))
 end
 
 create("TextLabel", {
     Name = "Credit",
     BackgroundTransparency = 1,
     AnchorPoint = Vector2.new(0, 0.5),
-    Position = UDim2.new(0, CORNER_INSET + 2, 1, FOOTER_Y + Layout.footerHeight / 2 - PANEL_HEIGHT),
+    Position = UDim2.new(0, CORNER_INSET + 2, 1, -Layout.footerHeight / 2 - CORNER_INSET), -- same gap from the bottom as from the side
     Size = UDim2.fromOffset(150, 16),
     FontFace = font(Enum.FontWeight.Medium),
     Text = options.Footer or "made by ego",
@@ -518,7 +519,7 @@ local biolinkButton: TextButton = create("TextButton", {
     BackgroundColor3 = Theme.mist,
     BackgroundTransparency = 0.93,
     AnchorPoint = Vector2.new(1, 0.5),
-    Position = UDim2.new(1, -CORNER_INSET, 1, FOOTER_Y + Layout.footerHeight / 2 - PANEL_HEIGHT),
+    Position = UDim2.new(1, -CORNER_INSET, 1, -Layout.footerHeight / 2 - CORNER_INSET), -- same gap from the bottom as from the side
     AutomaticSize = Enum.AutomaticSize.X,
     Size = UDim2.fromOffset(0, Layout.footerHeight),
     ZIndex = 3,
