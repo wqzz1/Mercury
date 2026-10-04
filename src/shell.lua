@@ -262,7 +262,7 @@ local gameTitle: TextLabel = create("TextLabel", {
     FontFace = font(Enum.FontWeight.Bold),
     Text = "Loading game…",
     TextTruncate = Enum.TextTruncate.AtEnd,
-    TextSize = 14,
+    TextSize = 16,
     TextXAlignment = Enum.TextXAlignment.Left,
     TextColor3 = Theme.mist,
     ZIndex = 2,
@@ -647,18 +647,7 @@ if lavaAsset then
     })
     corner(toastMarble, 18)
 end
-local toastRim = create("UIStroke", {
-    Color = Theme.lilac,
-    Transparency = 0.48,
-    Thickness = 1,
-    ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
-    Parent = toast,
-})
-create("UIGradient", {
-    Rotation = 90,
-    Transparency = numberSeq({{0, 0.1}, {0.5, 0.65}, {1, 0.35}}),
-    Parent = toastRim,
-})
+specularRim(toast, 1.5, 0.08)
 liquidWave(toast, TOAST_SIZE.X, TOAST_SIZE.Y, 18, 10)
 for _, layer in toast:GetChildren() do
     if layer.Name == "LiquidWater" then

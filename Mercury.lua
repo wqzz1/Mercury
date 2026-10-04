@@ -1162,7 +1162,7 @@ local gameTitle: TextLabel = create("TextLabel", {
     FontFace = font(Enum.FontWeight.Bold),
     Text = "Loading game…",
     TextTruncate = Enum.TextTruncate.AtEnd,
-    TextSize = 14,
+    TextSize = 16,
     TextXAlignment = Enum.TextXAlignment.Left,
     TextColor3 = Theme.mist,
     ZIndex = 2,
@@ -1547,18 +1547,7 @@ if lavaAsset then
     })
     corner(toastMarble, 18)
 end
-local toastRim = create("UIStroke", {
-    Color = Theme.lilac,
-    Transparency = 0.48,
-    Thickness = 1,
-    ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
-    Parent = toast,
-})
-create("UIGradient", {
-    Rotation = 90,
-    Transparency = numberSeq({{0, 0.1}, {0.5, 0.65}, {1, 0.35}}),
-    Parent = toastRim,
-})
+specularRim(toast, 1.5, 0.08)
 liquidWave(toast, TOAST_SIZE.X, TOAST_SIZE.Y, 18, 10)
 for _, layer in toast:GetChildren() do
     if layer.Name == "LiquidWater" then
@@ -3632,6 +3621,7 @@ local function finish(minimized)
 end
 function api.start(minimized,instant)
  if state=='morph' or contentFadingIn then pending=minimized;return end
+ if api.pauseField then api.pauseField() end
  if instant or PERF.instant then
   if minimized then preparePanel();morph=newMorph(1);morph.t=1;hideBubbleBody();iconEntries=snapshot(iconHolder) end
   instantFinish=true;finish(minimized);instantFinish=false;return
@@ -4408,7 +4398,7 @@ end
 -- bubble's. Each renders in a small window that includes the panel edge it grows
 -- from, faded into the panel at the window border so the rim stays continuous.
 do
- local MAX,WINDOW,MARGIN,FADE=3,208,40,10
+ local MAX,WINDOW,MARGIN,FADE=5,208,40,10
  local drops={}
  local nextSpawn=1.5
  local outline,outlineKey={},nil
@@ -4434,7 +4424,7 @@ do
    local clear=not (x>w-60 and y>h-60)
    for _,d in ipairs(drops) do local gap=math.abs((d.arc-arc+L/2)%L-L/2);if gap<140 then clear=false end end
    if clear then
-    drops[#drops+1]={slot=slot(),start=clock,bud=rand(.7,1.1),float=rand(1.4,3.6),back=rand(1.6,2.6),arc=arc,out=rand(.7,1.15)*REF_R,r=rand(8.5,11.5),speed=rand(.25,.7)*REF_R*(rand(0,1)<.5 and -1 or 1),bob=rand(.6,1.4),phase=rand(0,2*pi),split=rand(0,1)<.4,splitSpin=rand(2.5,4.5)}
+    drops[#drops+1]={slot=slot(),start=clock,bud=rand(.7,1.1),float=rand(1.4,3.6),back=rand(1.6,2.6),arc=arc,out=rand(.7,1.15)*REF_R,r=rand(10,13),speed=rand(.25,.7)*REF_R*(rand(0,1)<.5 and -1 or 1),bob=rand(.6,1.4),phase=rand(0,2*pi),split=rand(0,1)<.4,splitSpin=rand(2.5,4.5)}
     return
    end
   end
@@ -4756,14 +4746,25 @@ end
 -- the shared frame budget; the transition always has priority.
 local runner=nil
 local runnerArgs=nil
+local runnerJob=nil
 local nextJob=1
 local wasActive={}
+liquid.pauseField=function()
+ runner=nil;runnerArgs=nil;runnerJob=nil
+ for _,job in ipairs(jobs) do
+  if job.reset then job.reset() end
+  wasActive[job]=false
+ end
+end
 liquid.service=function(dt)
  if stopped then return end
  clock=os.clock()-epoch
  for _,job in ipairs(jobs) do
   local on=job.active()
-  if not on and wasActive[job] and job.reset then job.reset() end
+  if not on and wasActive[job] then
+   if runnerJob==job then runner=nil;runnerArgs=nil;runnerJob=nil end
+   if job.reset then job.reset() end
+  end
   wasActive[job]=on
   job.elapsed+=dt
  end
@@ -4778,7 +4779,7 @@ liquid.service=function(dt)
     local job=jobs[index]
     if wasActive[job] and job.run and job.elapsed>=job.interval then
      local delta=job.elapsed;job.elapsed=0;nextJob=index%count+1
-     runner=coroutine.create(job.run);runnerArgs={delta}
+     runner=coroutine.create(job.run);runnerArgs={delta};runnerJob=job
      break
     end
    end
@@ -4789,8 +4790,8 @@ liquid.service=function(dt)
   local ok,err
   if args then ok,err=coroutine.resume(runner,args[1]) else ok,err=coroutine.resume(runner) end
   pacing.budget=nil
-  if not ok then runner=nil;error(err,0) end
-  if coroutine.status(runner)=='dead' then runner=nil else break end
+  if not ok then runner=nil;runnerJob=nil;error(err,0) end
+  if coroutine.status(runner)=='dead' then runner=nil;runnerJob=nil else break end
   if os.clock()-pacing.frameStart>pacing.limit then break end
  end
 end
