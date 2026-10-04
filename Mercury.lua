@@ -5700,13 +5700,19 @@ function window:CreateTab(name, icon)
         end
         heading:GetPropertyChangedSignal("TextBounds"):Connect(placeRule)
         placeRule()
-        -- Soft drop shadow: one faint dark copy of the title 1px below it, so the
-        -- letters lift slightly off the glass. (Nothing spills past the glyphs.)
+        -- Gradient shine + bottom light: the title is lit from above (bright at the
+        -- top of the letters, dimmer toward the bottom, like the glass rows' sheen),
+        -- and one very faint near-white copy 1px below catches the lower edge.
         local glowLayers = {}
-        create("TextLabel", {Name = "TitleShadow", BackgroundTransparency = 1,
+        create("UIGradient", {Rotation = 90, Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 252, 255)),
+            ColorSequenceKeypoint.new(0.45, Theme.mist),
+            ColorSequenceKeypoint.new(1, Color3.fromRGB(176, 160, 210)),
+        }), Parent = heading})
+        create("TextLabel", {Name = "TitleBottomLight", BackgroundTransparency = 1,
             Position = heading.Position + UDim2.fromOffset(0, 1), Size = heading.Size, FontFace = heading.FontFace,
-            Text = heading.Text, TextSize = heading.TextSize, TextColor3 = Color3.new(0, 0, 0),
-            TextTransparency = 0.45, TextXAlignment = heading.TextXAlignment,
+            Text = heading.Text, TextSize = heading.TextSize, TextColor3 = Theme.spec,
+            TextTransparency = 0.86, TextXAlignment = heading.TextXAlignment,
             TextYAlignment = heading.TextYAlignment, ZIndex = 0, Parent = holder})
         -- The rule is the right half of the regular divider: same layer count, taper,
         -- per-layer fade and colour (read from Divider), bright at the title, thinning out.
