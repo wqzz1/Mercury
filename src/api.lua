@@ -643,7 +643,7 @@ function window:CreateTab(name, icon)
         holder.AutomaticSize = Enum.AutomaticSize.Y
         -- Heading: TITLE ─────── with half a tapered divider after the title, thick
         -- and glowing next to the text and thinning out toward the right edge.
-        local HEAD_H, RULE_GAP, RULE_LENGTH = 24, 16, 170
+        local HEAD_H, RULE_GAP, RULE_LENGTH, RULE_NUDGE = 24, 16, 170, -1
         -- title lines up with the row labels inside the glass rows, not the rows' edge
         local TITLE_X = Layout.padX + 20
         local heading = create("TextLabel", {Name = "Heading", BackgroundTransparency = 1,
@@ -656,7 +656,9 @@ function window:CreateTab(name, icon)
         passThrough(mark)
         local function placeRule()
             local start = math.ceil(heading.TextBounds.X) + RULE_GAP
-            mark.Position = UDim2.fromOffset(TITLE_X + start, math.round(HEAD_H / 2 - Divider.maxThickness / 2))
+            -- the text box leaves room below for descenders (g, p, y), so ALL-CAPS titles sit
+            -- ~1px above the box centre; RULE_NUDGE lines the rule up with the capitals instead
+            mark.Position = UDim2.fromOffset(TITLE_X + start, math.round(HEAD_H / 2 - Divider.maxThickness / 2) + RULE_NUDGE)
             mark.Size = UDim2.fromOffset(RULE_LENGTH, Divider.maxThickness)
         end
         heading:GetPropertyChangedSignal("TextBounds"):Connect(placeRule)
