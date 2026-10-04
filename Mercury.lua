@@ -4911,7 +4911,7 @@ local ch=get_comm_channel(id)
 local floor,min,max,sqrt=math.floor,math.min,math.max,math.sqrt
 local rng=Random.new()
 local function rand(a,b) return rng:NextNumber(a,b) end
-local FL={h=15,rho0=3,k=.75,kn=2.5,sig=.2,beta=.1,maxV=10,count=260,rush=8.5}
+local FL={h=15,rho0=3,k=.75,kn=2.5,sig=.32,beta=.14,maxV=6.5,count=260,rush=5.6,rate=8}
 local function sdRound(x,y,x0,y0,x1,y1,r)
  local qx=math.abs(x-(x0+x1)/2)-((x1-x0)/2-r);local qy=math.abs(y-(y0+y1)/2)-((y1-y0)/2-r)
  local ox,oy=max(qx,0),max(qy,0)
@@ -4944,7 +4944,7 @@ local function substep(sim,dt)
  local n=#xs;if n==0 then return end
  local h=FL.h;local g=sim.g
  local grid=buildGrid(xs,ys,h)
- if sim.suck then for i=1,n do vx[i]-=.5*dt;if xs[i]<g.gap+16 then vy[i]+=(g.cy-ys[i])*.025*dt end end end
+ if sim.suck then for i=1,n do vx[i]-=.85*dt;if xs[i]<g.gap+16 then vy[i]+=(g.cy-ys[i])*.025*dt end end end
  for i=1,n do
   local cx,cy=floor(xs[i]/h),floor(ys[i]/h)
   for oy=-1,1 do for ox=-1,1 do local cell=grid[cx+ox+(cy+oy)*4096]
@@ -5001,7 +5001,7 @@ local function simFrame(sim)
  local g=sim.g
  if sim.mode=='fill' then
   if sim.t<.18 then if rand(0,1)<.6 then inject(sim,1,1.4,1.5) end
-  elseif sim.injected<FL.count then inject(sim,min(10,FL.count-sim.injected),FL.rush,4.2)
+  elseif sim.injected<FL.count then inject(sim,min(FL.rate,FL.count-sim.injected),FL.rush,4.6)
   elseif sim.snapAt<0 then sim.snapAt=sim.t+.12 end
   if sim.snapAt>0 and sim.t>=sim.snapAt and sim.neckOpen then
    sim.neckOpen=false
@@ -5018,7 +5018,7 @@ local function fullSim(g)
   local x=g.gap+3.3+(row%2)*d/2
   while x<g.gap+g.cw-2 do
    if sdRound(x,y,g.gap,g.cy-g.ch/2,g.gap+g.cw,g.cy+g.ch/2,g.rad)<-2.5 then
-    local i=#sim.xs+1;sim.xs[i]=x;sim.ys[i]=y;sim.vx[i]=0;sim.vy[i]=0;sim.px[i]=x;sim.py[i]=y end
+    local i=#sim.xs+1;sim.xs[i]=x;sim.ys[i]=y;sim.vx[i]=-1.6*(1-(x-g.gap)/g.cw*.5);sim.vy[i]=(g.cy-y)*.02;sim.px[i]=x;sim.py[i]=y end
    x+=d
   end
   y+=d*.866;row+=1
@@ -5076,7 +5076,7 @@ ch.Event:Connect(function(tag,fid,ox,oy,w,h,r,dir,ex,g,cardScale,pos,n,mat)
   end
  end
  if pos and n>0 then
-  local R=5.5;local R2=R*R
+  local R=6.5;local R2=R*R
   for p=0,n-1 do
    local X=ex+dir*readf32(pos,p*8);local Y=readf32(pos,p*8+4)
    local cx,cy=(X-ox)/2,(Y-oy)/2
@@ -5084,7 +5084,7 @@ ch.Event:Connect(function(tag,fid,ox,oy,w,h,r,dir,ex,g,cardScale,pos,n,mat)
    local j0,j1=max(0,floor(cy-R)),min(FH-1,math.ceil(cy+R))
    for j=j0,j1 do local dy=j-cy;local row=j*FW
     for i=i0,i1 do local dx=i-cx;local d2=dx*dx+dy*dy
-     if d2<R2 then local k=1-d2/R2;field[row+i+1]+=k*k*.55 end end end
+     if d2<R2 then local k=1-d2/R2;field[row+i+1]+=k*k*.48 end end end
   end
   -- two 1-2-1 smoothing passes: the particles read as one surface
   for _=1,2 do
