@@ -923,6 +923,46 @@ end
 window.AddTab = window.CreateTab
 window.SettingsTab = window:CreateTab("Settings", "settings")
 
+-- The game name wears the section headings' glint: white text tinted by a
+-- UIGradient, with a soft band (and faint trail) sweeping across the text
+-- every few seconds. The band is sized to the text, not the wider label.
+do
+    local WHITE = Color3.new(1, 1, 1)
+    local POINTS = {0, 0.08, 0.14, 0.2, 0.26, 0.32, 0.37, 0.40, 0.425, 0.45, 0.57, 0.6, 0.63}
+    local function smooth(x) x = math.clamp(x, 0, 1); return x * x * (3 - 2 * x) end
+    local function glintAt(x)
+        if x < 0.08 then return 0
+        elseif x < 0.40 then return 0.3 * ((x - 0.08) / 0.32) ^ 2.2
+        elseif x < 0.45 then return 0.3 + 0.7 * smooth((x - 0.40) / 0.05)
+        elseif x <= 0.57 then return 1
+        else return 1 - smooth((x - 0.57) / 0.06) end
+    end
+    -- the band laid over the first `fraction` of the label (where the text is)
+    local fraction = 1
+    local function colors()
+        local base = Theme.mist:Lerp(Theme.bruise, 0.13)
+        local keys = {}
+        for _, x in POINTS do table.insert(keys, ColorSequenceKeypoint.new(x * fraction, base:Lerp(WHITE, glintAt(x)))) end
+        table.insert(keys, ColorSequenceKeypoint.new(1, base))
+        return ColorSequence.new(keys)
+    end
+    gameTitle.TextColor3 = Color3.new(0.95, 0.95, 0.95)
+    local titleGlint = create("UIGradient", {Offset = Vector2.new(-1.2, 0), Color = colors(), Parent = gameTitle})
+    Resize.themeHooks = Resize.themeHooks or {}
+    table.insert(Resize.themeHooks, function() if titleGlint.Parent then titleGlint.Color = colors() end end)
+    task.spawn(function()
+        local rng = Random.new()
+        task.wait(rng:NextNumber(0.8, 1.6))
+        while gameTitle.Parent and not state.destroyed do
+            fraction = math.clamp(gameTitle.TextBounds.X / math.max(1, gameTitle.AbsoluteSize.X), 0.05, 1)
+            titleGlint.Color = colors()
+            titleGlint.Offset = Vector2.new(-0.7 * fraction, 0)
+            tween(titleGlint, 2.4, {Offset = Vector2.new(1.0 * fraction, 0)}, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
+            task.wait(2.4 + rng:NextNumber(3, 5))
+        end
+    end)
+end
+
 -- Themes ---------------------------------------------------------------------
 -- window:SetTheme("Red") or a table of role colours ({Accent = ..., Text = ...},
 -- role names in config.lua). Every colour in the window is matched by value to

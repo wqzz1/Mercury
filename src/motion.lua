@@ -698,20 +698,19 @@ local material=(function()
    end
 
    local list={}
-   -- the glass surface a star overlaps most (backdrop units), or nil
+   -- how much of a star sits behind glass (rows, tabs, buttons): 0..1 of its box
    local function scaleK() local s=backdrop.AbsoluteSize;return s.X/max(1,root.Size.X.Offset) end
    local function coverOf(star)
     local p,s=backdrop.AbsolutePosition,backdrop.AbsoluteSize
-    local k=scaleK();if k<=0 then return nil end
+    local k=scaleK();if k<=0 then return 0 end
     local x,y=p.X+star.fx*s.X,p.Y+star.fy*s.Y
-    local r=star.size*.62*k
-    local best,area=nil,0
+    local r=star.size*.45*k
+    local covered=0
     for _,b in ipairs(glass) do
      local w,h=min(x+r,b[3])-max(x-r,b[1]),min(y+r,b[4])-max(y-r,b[2])
-     if w>0 and h>0 and w*h>area then area=w*h;best=b end
+     if w>0 and h>0 then covered+=w*h end
     end
-    if not best then return nil end
-    return {(best[1]-p.X)/k,(best[2]-p.Y)/k,(best[3]-p.X)/k,(best[4]-p.Y)/k}
+    return clamp(covered/(4*r*r),0,1)
    end
    local function place(star)
     star.tint=pickTint();rhythm(star)
@@ -719,55 +718,29 @@ local material=(function()
     star.fx,star.fy,star.open=fx,fy,true
     local set,fz=sets[star.tint],frost[star.tint]
     star.core.ImageContent=Content.fromObject(set.core.full);star.spike.ImageContent=Content.fromObject(set.spike.full)
+    star.blurCore.ImageContent=Content.fromObject(fz.core);star.blurSpike.ImageContent=Content.fromObject(fz.spike)
     star.core.Position=UDim2.fromScale(fx,fy);star.spike.Position=star.core.Position
-    for i,clip in ipairs(star.clips) do
-     local blurred=i==1
-     clip.core.ImageContent=Content.fromObject(blurred and fz.core or set.core.full)
-     clip.spike.ImageContent=Content.fromObject(blurred and fz.spike or set.spike.full)
-    end
-    star.rect=coverOf(star)
+    star.blurCore.Position=star.core.Position;star.blurSpike.Position=star.core.Position
+    star.coverTarget=coverOf(star);star.cover=star.coverTarget
    end
-   -- clip 1 shows the star inside its glass rect (blurred); clips 2-5 are the bands
-   -- around that rect (sharp), so a star between surfaces is only blurred where covered
-   local function makeClips()
-    local clips={}
-    for i=1,5 do
-     local frame=create('Frame',{Name='StarClip',BackgroundTransparency=1,ClipsDescendants=true,Visible=false,Parent=backdrop})
-     passThrough(frame)
-     local spike=create('ImageLabel',{BackgroundTransparency=1,AnchorPoint=Vector2.new(.5,.5),ImageTransparency=1,Parent=frame})
-     local core=create('ImageLabel',{BackgroundTransparency=1,AnchorPoint=Vector2.new(.5,.5),ImageTransparency=1,Parent=frame})
-     clips[i]={frame=frame,core=core,spike=spike}
-    end
-    return clips
-   end
-   local function paint(star)
-    local rect=star.rect
-    star.core.Visible=rect==nil;star.spike.Visible=rect==nil
-    if not rect then for _,clip in ipairs(star.clips) do clip.frame.Visible=false end;return end
-    local s=backdrop.AbsoluteSize;local k=scaleK()
-    local cx,cy=star.fx*s.X/k,star.fy*s.Y/k
-    local R=star.size*.65
-    local bx0,by0,bx1,by1=cx-R,cy-R,cx+R,cy+R
-    local x0,y0,x1,y1=max(rect[1],bx0),max(rect[2],by0),min(rect[3],bx1),min(rect[4],by1)
-    local boxes={{x0,y0,x1,y1},{bx0,by0,bx1,y0},{bx0,y1,bx1,by1},{bx0,y0,x0,y1},{x1,y0,bx1,y1}}
-    for i,clip in ipairs(star.clips) do
-     local b=boxes[i]
-     local show=b[3]-b[1]>.01 and b[4]-b[2]>.01
-     clip.frame.Visible=show
-     if show then
-      clip.frame.Position=UDim2.fromOffset(b[1],b[2]);clip.frame.Size=UDim2.fromOffset(b[3]-b[1],b[4]-b[2])
-      local at=UDim2.fromOffset(cx-b[1],cy-b[2])
-      clip.core.Position=at;clip.spike.Position=at
-      clip.core.Size=star.core.Size;clip.spike.Size=star.spike.Size
-      clip.core.ImageTransparency=star.core.ImageTransparency;clip.spike.ImageTransparency=star.spike.ImageTransparency
-     end
-    end
+   -- A star behind glass is seen blurred, in the gaps sharp; one that straddles an
+   -- edge shows both in proportion, and any change fades over ~0.2 s (no hard
+   -- clipped halves, nothing that switches in a single frame).
+   local function paint(star,dt)
+    star.cover+=(star.coverTarget-star.cover)*min(1,(dt or 0)*10)
+    local c=star.cover
+    local coreA,spikeA=1-star.core.ImageTransparency,1-star.spike.ImageTransparency
+    star.blurCore.Size=star.core.Size;star.blurSpike.Size=star.spike.Size
+    star.blurCore.ImageTransparency=1-coreA*c;star.blurSpike.ImageTransparency=1-spikeA*c
+    star.core.ImageTransparency=1-coreA*(1-c);star.spike.ImageTransparency=1-spikeA*(1-c)
    end
    for index=1,10 do
     local spike=create('ImageLabel',{Name='Star'..index,BackgroundTransparency=1,AnchorPoint=Vector2.new(.5,.5),ImageTransparency=1,Size=UDim2.fromOffset(0,0),Parent=backdrop})
     local core=create('ImageLabel',{Name='StarCore'..index,BackgroundTransparency=1,AnchorPoint=Vector2.new(.5,.5),ImageTransparency=1,Size=UDim2.fromOffset(0,0),Parent=backdrop})
-    passThrough(spike);passThrough(core)
-    local star={clips=makeClips(),core=core,spike=spike,size=rng:NextNumber(16,26),peak=rng:NextNumber(.55,.95),period=rng:NextNumber(3.2,6.5),lit=rng:NextNumber(.28,.42),phase=rng:NextNumber(0,10),cycle=-1,fx=.5,fy=.5,open=false,shown=1,tint=1,coreA=0,spikeA=0,coreS=0,spikeS=0}
+    local blurSpike=create('ImageLabel',{Name='StarBlur'..index,BackgroundTransparency=1,AnchorPoint=Vector2.new(.5,.5),ImageTransparency=1,Size=UDim2.fromOffset(0,0),Parent=backdrop})
+    local blurCore=create('ImageLabel',{Name='StarBlurCore'..index,BackgroundTransparency=1,AnchorPoint=Vector2.new(.5,.5),ImageTransparency=1,Size=UDim2.fromOffset(0,0),Parent=backdrop})
+    passThrough(spike);passThrough(core);passThrough(blurSpike);passThrough(blurCore)
+    local star={blurCore=blurCore,blurSpike=blurSpike,cover=0,coverTarget=0,core=core,spike=spike,size=rng:NextNumber(16,26),peak=rng:NextNumber(.55,.95),period=rng:NextNumber(3.2,6.5),lit=rng:NextNumber(.28,.42),phase=rng:NextNumber(0,10),cycle=-1,fx=.5,fy=.5,open=false,shown=1,tint=1,coreA=0,spikeA=0,coreS=0,spikeS=0}
     rhythm(star);list[#list+1]=star
    end
    -- bubble stars: offsets from the bubble's centre in panel units
@@ -825,13 +798,13 @@ local material=(function()
     for _,star in ipairs(list) do
      cycleOf(star,now,place)
      -- content moved over a lit star (scroll, tab change): let it fade out
-     if checked and star.open then star.rect=coverOf(star) end
+     if checked and star.open then star.coverTarget=coverOf(star) end
      star.shown+=((star.open and 1 or 0)-star.shown)*min(1,dt*10)
      shape(star,brightness(star,now,false))
      star.spike.ImageTransparency=1-star.spikeA;star.core.ImageTransparency=1-star.coreA
      star.spike.Size=UDim2.fromOffset(star.size*star.spikeS,star.size*star.spikeS)
      star.core.Size=UDim2.fromOffset(star.size*star.coreS,star.size*star.coreS)
-     paint(star)
+     paint(star,dt)
      -- the marble pictures use the steadier brightness
      shape(star,brightness(star,now,true))
     end
