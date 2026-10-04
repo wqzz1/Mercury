@@ -171,11 +171,12 @@ local Quality = {
 -- Marble-lava background texture (160x160 seamless tile, stored 2x2).
 local Lava = {
     tile = 160,
+    texScale = 1,          -- texture pixels per tile pixel (3 once the smooth hi-res copy is built)
     window = 105,           -- texture rows shown across the panel; smaller = bigger, sparser swirls
     layers = {
-        { color = Theme.lava, transparency = 0.64,
+        { color = Theme.lava, transparency = 0.56,
           velocity = Vector2.new(1.6, 1.1), origin = Vector2.new(0, 0) },
-        { color = Theme.lavaDeep, transparency = 0.8,
+        { color = Theme.lavaDeep, transparency = 0.72,
           velocity = Vector2.new(-1.2, 1.5), origin = Vector2.new(70, 40) },
     },
 }

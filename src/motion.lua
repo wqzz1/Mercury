@@ -208,7 +208,7 @@ do
         local rect = if aspect >= 1 then Vector2.new(Lava.window, Lava.window / aspect)
             else Vector2.new(Lava.window * aspect, Lava.window)
         for _, lava in lavaLayers do
-            lava.label.ImageRectSize = rect
+            lava.label.ImageRectSize = rect * (Lava.texScale or 1)
         end
     end
 
@@ -1234,6 +1234,65 @@ local material=(function()
    if label then texture=AS:CreateEditableImageAsync(Content.fromUri(label.Image)) end
   end)
   if not ok then warn('[LiquidMaterial] lava texture unavailable',err) end
+  -- The lava texture is magnified ~5x on screen, so its texels showed as grain
+  -- and steps. Build a smooth 3x copy once (Catmull-Rom, separable, wrapping the
+  -- seamless tile), in the background, then switch the panel and the liquid to it.
+  if not texture then return end
+  local ok2,err2=pcall(function()
+   local F=3
+   local src=texture.Size.X;local tile=src//2           -- stored 2x2
+   local px=texture:ReadPixelsBuffer(Vector2.zero,texture.Size)
+   local function ch(x,y,c) return buffer.readu8(px,((y%tile)*src+(x%tile))*4+c) end
+   local function weights(t)
+    local t2,t3=t*t,t*t*t
+    return -.5*t3+t2-.5*t, 1.5*t3-2.5*t2+1, -1.5*t3+2*t2+.5*t, .5*t3-.5*t2
+   end
+   local H=tile*F
+   -- horizontal pass: tile x tile -> H x tile (float channels)
+   local mid=table.create(H*tile*4,0)
+   local slice=os.clock()
+   for y=0,tile-1 do
+    for X=0,H-1 do
+     local sx=(X+.5)/F-.5;local x0=math.floor(sx);local w0,w1,w2,w3=weights(sx-x0)
+     for c=0,3 do
+      mid[(y*H+X)*4+c+1]=ch(x0-1,y,c)*w0+ch(x0,y,c)*w1+ch(x0+1,y,c)*w2+ch(x0+2,y,c)*w3
+     end
+    end
+    if os.clock()-slice>.003 then task.wait();slice=os.clock() end
+   end
+   -- vertical pass into the 2x2 stored hi-res texture
+   local out=buffer.create(2*H*2*H*4)
+   local function m4(X,y,c) return mid[((y%tile)*H+X)*4+c+1] end
+   for Y=0,H-1 do
+    local sy=(Y+.5)/F-.5;local y0=math.floor(sy);local w0,w1,w2,w3=weights(sy-y0)
+    for X=0,H-1 do
+     local v={}
+     for c=0,3 do
+      local s=m4(X,y0-1,c)*w0+m4(X,y0,c)*w1+m4(X,y0+1,c)*w2+m4(X,y0+2,c)*w3
+      v[c]=s<0 and 0 or (s>255 and 255 or math.floor(s+.5))
+     end
+     local p=v[0]+v[1]*256+v[2]*65536+v[3]*16777216
+     for oy=0,1 do for ox=0,1 do buffer.writeu32(out,(((Y+oy*H)*2*H)+X+ox*H)*4,p) end end
+    end
+    if os.clock()-slice>.003 then task.wait();slice=os.clock() end
+   end
+   if stopped then return end
+   local hi=AS:CreateEditableImage({Size=Vector2.new(2*H,2*H)})
+   hi:WritePixelsBuffer(Vector2.zero,Vector2.new(2*H,2*H),out)
+   -- switch: texture units scale by F everywhere the lava is addressed
+   local old=texture;texture=hi
+   Lava.texScale=F
+   for _,layer in ipairs(lavaLayers) do
+    local l=layer.label
+    l.ImageContent=Content.fromObject(hi)
+    l.ImageRectSize=l.ImageRectSize*F
+   end
+   local stale=assets;assets=nil
+   if stale then task.delay(1,release,stale) end
+   m.invalidateSheet()
+   task.delay(1,function() old:Destroy() end)
+  end)
+  if not ok2 then warn('[LiquidMaterial] smooth lava unavailable',err2) end
  end)
  function m.destroy()
   local stars=Liquid.stars
@@ -3904,7 +3963,11 @@ do
    for _,pair in ipairs(layerPairs) do
     local original,copy=pair[1],pair[2]
     copy.Position=original.Position;copy.Rotation=original.Rotation;copy.Size=original.Size
-    if original:IsA('ImageLabel') then copy.ImageRectOffset=original.ImageRectOffset;copy.ImageRectSize=original.ImageRectSize;copy.ImageTransparency=original.ImageTransparency end
+    if original:IsA('ImageLabel') then
+     -- the lava switches to its smooth hi-res copy once built: follow it
+     if (Lava.texScale or 1)>1 and not copy:GetAttribute('HiRes') then copy:SetAttribute('HiRes',true);copy.ImageContent=original.ImageContent end
+     copy.ImageRectOffset=original.ImageRectOffset;copy.ImageRectSize=original.ImageRectSize;copy.ImageTransparency=original.ImageTransparency
+    end
     if pair[3] and pair[4] then pair[4].Offset=pair[3].Offset;pair[4].Rotation=pair[3].Rotation end
    end
    local position,size=skeletonGhost.AbsolutePosition,skeletonGhost.AbsoluteSize
@@ -4160,7 +4223,7 @@ local function onRenderStep(deltaTime: number)
         lava.label.ImageRectOffset = Vector2.new(
             (lava.origin.X + travel.X) % Lava.tile,
             (lava.origin.Y + travel.Y) % Lava.tile
-        )
+        ) * (Lava.texScale or 1)
     end
     if Liquid.stars then
         Liquid.stars.update(clock)
