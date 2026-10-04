@@ -5337,7 +5337,7 @@ local function sdRR(x,y,x0,y0,x1,y1,r)
 end
 local y0,y1=floor(H*(part-1)/parts),floor(H*part/parts)
 local conn
-conn=ch.Event:Connect(function(tag,fid,ox,oy,w,h,r,dir,ex,g,cardScale,pos,n,mat,maskMode)
+conn=ch.Event:Connect(function(tag,fid,ox,oy,w,h,r,dir,ex,g,cardScale,pos,n,mat,maskMode,rimAmount)
  if tag=='quit' then conn:Disconnect();lastMat=nil;return end
  -- the marble crop is only sent when it changed
  if tag=='tick' then if mat then lastMat=mat else mat=lastMat end;if not mat and not maskMode then return end end
@@ -5394,7 +5394,7 @@ conn=ch.Event:Connect(function(tag,fid,ox,oy,w,h,r,dir,ex,g,cardScale,pos,n,mat,
    local i00=jy*FW+ix+1
    local a00,a10=field[i00],field[i00+1]
    local a01,a11=field[i00+FW],field[i00+FW+1]
-   if a00>=1.2 and a10>=1.2 and a01>=1.2 and a11>=1.2 and pf[i00]==0 and pf[i00+1]==0 and pf[i00+FW]==0 and pf[i00+FW+1]==0 then
+   if not (rimAmount and rimAmount>0) and a00>=1.2 and a10>=1.2 and a01>=1.2 and a11>=1.2 and pf[i00]==0 and pf[i00+1]==0 and pf[i00+FW]==0 and pf[i00+FW+1]==0 then
     -- deep inside (flat plateau): no rim light, the marble shows as is
     local edge=min(min(x,W-1-x),min(y,H-1-y))
     local a=edge<22 and floor(edge/22*255+.5) or 255
@@ -5412,12 +5412,27 @@ conn=ch.Event:Connect(function(tag,fid,ox,oy,w,h,r,dir,ex,g,cardScale,pos,n,mat,
     local alpha=dist+.5
     if alpha>0 then
      if alpha>1 then alpha=1 end
-     local light=(gx*.6+gy*.8)/gl;if light<0 then light=0 elseif light>1 then light=1 end
-     local dd=dist>0 and dist or 0
-     local key=floor(dd*16);if key>1024 then key=1024 end
-     local shine=RIM_NEAR[key]*(.18+.82*light)+RIM_BROAD[key]*light;if shine>1 then shine=1 end
-     -- the flowing liquid (particles) has no rim light of its own, only the card does
-     local solid=(pv+cv)*2;if solid<1 then shine*=solid>0 and solid or 0 end
+     -- Rim light comes from the card's final outline only (the flowing liquid has
+     -- none), faded in by rimAmount while the card settles: the last animation
+     -- frame and the still card then have the very same border.
+     local shine=0
+     if rimAmount and rimAmount>0 then
+      local px,py=ox+x+.5,oy+y+.5
+      if dir*(px-ex)>g.gap-.5 then
+       local mid=ex+dir*(g.gap+g.cw/2)
+       local cx0,cy0,cx1,cy1=mid-g.cw/2,g.cy-g.ch/2,mid+g.cw/2,g.cy+g.ch/2
+       local sd=sdRR(px,py,cx0,cy0,cx1,cy1,g.rad)
+       if sd<.5 then
+        local nx=sdRR(px+.5,py,cx0,cy0,cx1,cy1,g.rad)-sdRR(px-.5,py,cx0,cy0,cx1,cy1,g.rad)
+        local ny=sdRR(px,py+.5,cx0,cy0,cx1,cy1,g.rad)-sdRR(px,py-.5,cx0,cy0,cx1,cy1,g.rad)
+        local nl=sqrt(nx*nx+ny*ny)+1e-6
+        local light=(-nx*.6-ny*.8)/nl;if light<0 then light=0 elseif light>1 then light=1 end
+        local dd=-sd;if dd<0 then dd=0 end
+        local key=floor(dd*16);if key>1024 then key=1024 end
+        shine=(RIM_NEAR[key]*(.18+.82*light)+RIM_BROAD[key]*light)*rimAmount;if shine>1 then shine=1 end
+       end
+      end
+     end
      local edge=min(min(x,W-1-x),min(y,H-1-y));if edge<22 then alpha*=edge/22 end
      -- inside the window the window itself shows: the liquid starts at its edge
      if pv>0 then local inside=sdRR(ox+x+.5,oy+y+.5,0,0,w,h,r);if inside<.5 then alpha*=clamp(inside+.5,0,1) end end
@@ -5489,36 +5504,22 @@ ch:Fire('ready')
  -- shape once (alpha + rim strength); from then on each frame only copies the
  -- marble under it into the card's pixels (no worker frames), and the rim light
  -- sits on top as a fixed overlay. Same image, same edge: nothing swaps.
- local live=nil -- {x0,y0,w,h,alpha={},index={},key,buf,rimLabel,rimImage}
+ local live=nil -- {x0,y0,w,h,alpha={},shine={},index={},key,buf}
  local function liveBegin(maskBuf)
-  -- bounding box of the card's pixels, its alpha, and a white rim overlay
+  -- bounding box of the card's pixels, their alpha and rim-light strength (0-256)
   local x0,y0,x1,y1=W_,H_,-1,-1
   for y=0,H_-1 do for x=0,W_-1 do
    if buffer.readu32(maskBuf,(y*W_+x)*4)>=16777216 then if x<x0 then x0=x end;if x>x1 then x1=x end;if y<y0 then y0=y end;if y>y1 then y1=y end end
   end end
   if x1<x0 then return false end
   local w,h=x1-x0+1,y1-y0+1
-  local alpha=table.create(w*h,0)
-  local rimBuf=buffer.create(w*h*4)
+  local alpha,shine=table.create(w*h,0),table.create(w*h,0)
   for y=0,h-1 do for x=0,w-1 do
    local p=buffer.readu32(maskBuf,((y+y0)*W_+x+x0)*4)
-   local a,s=p//16777216,p%256
-   alpha[y*w+x+1]=a*16777216
-   if a>0 and s>0 then buffer.writeu32(rimBuf,(y*w+x)*4,16777215+floor(s*a/255+.5)*16777216) end
+   alpha[y*w+x+1]=(p//16777216)*16777216
+   shine[y*w+x+1]=floor((p%256)/255*256+.5)
   end end
-  if not live then live={} end
-  live.x0,live.y0,live.w,live.h,live.alpha,live.key=x0,y0,w,h,alpha,nil
-  live.buf=buffer.create(w*h*4);live.index=table.create(w*h,0)
-  if live.rimImage then live.rimImage:Destroy() end
-  live.rimImage=AS:CreateEditableImage({Size=Vector2.new(w,h)})
-  live.rimImage:WritePixelsBuffer(Vector2.zero,Vector2.new(w,h),rimBuf)
-  if not live.rimLabel then
-   live.rimLabel=create('ImageLabel',{Name='ToastMorphRim',BackgroundTransparency=1,ImageColor3=Theme.mist,ZIndex=9,Visible=false,Parent=panel})
-   passThrough(live.rimLabel)
-   track(function() if live and live.rimImage then live.rimImage:Destroy() end end)
-  end
-  live.rimLabel.ImageContent=Content.fromObject(live.rimImage)
-  live.rimLabel.Size=UDim2.fromOffset(w/k,h/k)
+  live={x0=x0,y0=y0,w=w,h=h,alpha=alpha,shine=shine,key=nil,buf=buffer.create(w*h*4),index=table.create(w*h,0)}
   return true
  end
  local function liveDraw(ox,oy)
@@ -5535,18 +5536,29 @@ ch:Fire('ready')
     for x=0,w-1 do index[y*w+x+1]=(sy+mirror(x+x0-mx,mw))*4 end
    end
   end
-  local readu32,writeu32,buf,alpha=buffer.readu32,buffer.writeu32,live.buf,live.alpha
+  local readu32,writeu32,buf,alpha,shine=buffer.readu32,buffer.writeu32,live.buf,live.alpha,live.shine
+  local band=bit32.band
+  local c=Theme.mist
+  local rimRB=math.round(c.R*255)+math.round(c.B*255)*65536;local rimG=math.round(c.G*255)*256
   for i=1,w*h do
    local a=alpha[i]
-   if a>0 then writeu32(buf,(i-1)*4,readu32(mat,index[i])%16777216+a) end
+   if a>0 then
+    local base=readu32(mat,index[i])
+    local s8=shine[i]
+    if s8>0 then
+     -- same blend as the workers: marble toward the rim colour by the rim strength
+     local inv=256-s8
+     base=band((band(base,16711935)*inv+rimRB*s8+8388736)//256,16711935)+band((band(base,65280)*inv+rimG*s8+32768)//256,65280)
+    else
+     base=base%16777216
+    end
+    writeu32(buf,(i-1)*4,base+a)
+   end
   end
   image:WritePixelsBuffer(Vector2.new(x0,y0),Vector2.new(w,h),buf)
   label.Position=UDim2.fromOffset(ox/k,oy/k)
-  live.rimLabel.Position=UDim2.fromOffset((ox+x0)/k,(oy+y0)/k)
  end
- local function liveShow(on)
-  if live and live.rimLabel then live.rimLabel.Visible=on end
- end
+ local function liveShow(on) end
  local function onSim(tag,buf,n,neck,st,snap)
   if tag=='ready' then readyCount+=1;ready=readyCount>=3
   elseif tag=='pos' then simState.got=true;simState.buf=buf;simState.n=n;simState.neckOpen=neck;simState.t=st;simState.snapAt=snap end
@@ -5631,13 +5643,13 @@ ch:Fire('ready')
   local g=m.g;local dir=m.onRight and 1 or -1;local ex=m.onRight and w or 0
   local ox=m.onRight and floor((ex-30)/2)*2 or floor((ex-g.gap-g.cw-30)/2)*2
   local oy=floor((g.cy-H_/2)/2)*2
-  local cardScale,usePos=0,true
+  local cardScale,usePos,rim=0,true,0
   if m.opening then
    if m.hold then
     if m.liveOn then liveDraw(ox,oy);return end
     if m.maskWanted then return end -- the shape is on its way; the last frame stays up
     if now-(m.drawn or 0)<.012 then return end
-    m.drawn=now;cardScale,usePos=1,false
+    m.drawn=now;cardScale,usePos,rim=1,false,1
    else
     local total=Layout.transitionTime or 1.05
     if not m.settleAt and simState.got and not simState.neckOpen and now>=m.openClock+total-.3 then m.settleAt=now end
@@ -5649,10 +5661,11 @@ ch:Fire('ready')
      m.maskWanted=true
      frameId+=1
      pending[frameId]={ox=ox,oy=oy,mask=true}
-     drawChannel:Fire('tick',frameId,ox,oy,w,h,r,dir,ex,g,1,nil,0,nil,true)
+     drawChannel:Fire('tick',frameId,ox,oy,w,h,r,dir,ex,g,1,nil,0,nil,true,1)
      return
     else
      cardScale=settle>0 and (.9+.1*settle) or 0
+     rim=settle
      simChannel:Fire('tick')
     end
    end
@@ -5660,9 +5673,10 @@ ch:Fire('ready')
    if now<m.start then
     if m.liveFrom then liveDraw(ox,oy);return end
     if now-(m.drawn or 0)<.012 then return end
-    m.drawn=now;cardScale,usePos=1,false
+    m.drawn=now;cardScale,usePos,rim=1,false,1
    else
     if not m.started then m.started=now;simState.got=false;simChannel:Fire('simClose',g) end
+    rim=max(0,1-(now-m.started)/.25) -- the border fades as the card starts to drain
     simChannel:Fire('tick')
     if simState.got and simState.n==0 and now-m.started>.15 then finish();return end
    end
@@ -5670,7 +5684,7 @@ ch:Fire('ready')
   local fresh=cropMaterial(ox,oy)
   frameId+=1
   local entry=pending[frameId] or {};entry.ox,entry.oy=ox,oy;pending[frameId]=entry
-  drawChannel:Fire('tick',frameId,ox,oy,w,h,r,dir,ex,g,cardScale,usePos and simState.buf or nil,usePos and simState.n or 0,fresh)
+  drawChannel:Fire('tick',frameId,ox,oy,w,h,r,dir,ex,g,cardScale,usePos and simState.buf or nil,usePos and simState.n or 0,fresh,false,rim)
  end))
  toastMorph={
   ready=function() return ready end,
