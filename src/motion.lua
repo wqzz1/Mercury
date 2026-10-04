@@ -501,6 +501,46 @@ local material=(function()
   return keys[#keys].Value
  end
  local function byte(v) return clamp(round(v*255),0,255) end
+ -- EditableImage's BlendSourceOver floors: floor(d+(s-d)*A/255), so each layer
+ -- blended over the marble loses ~0.55 of a level. The marble stacks 4-6 such
+ -- layers and came out ~2.5 levels darker than the GPU-drawn panel (measured on
+ -- screen: -2.7/-2.5/-2.3 RGB), which showed as a darker liquid during the
+ -- minimize morph. Layer pixels are stored pre-compensated instead:
+ --  * colour raised by 0.5*255/A: the floored blend then lands on the rounded
+ --    value for any destination (exact);
+ --  * where that would pass 255 (the white lava, the warm gloss) the alpha is
+ --    raised by one step on an ordered-dither share of pixels, worth half a
+ --    level on average over the dark marble (DITHER_REF: typical level below).
+ local BAYER={[0]=0,8,2,10,12,4,14,6,3,11,1,9,15,7,13,5}
+ local DITHER_REF=40
+ local function overPixel(r,g,b,A,x,y)
+  if A<=0 or A>=255 then return r+g*256+b*65536+A*16777216 end
+  local lift=127.5/A
+  local r2,g2,b2=floor(r+lift+.5),floor(g+lift+.5),floor(b+lift+.5)
+  if r2<=255 and g2<=255 and b2<=255 then return r2+g2*256+b2*65536+A*16777216 end
+  local gain=(r+g+b)/3-DITHER_REF
+  if gain>0 and BAYER[(y%4)*4+x%4]<8*255/gain then A+=1 end
+  return r+g*256+b*65536+A*16777216
+ end
+ -- the same, applied in place to an already drawn layer image
+ local function compensateImage(image,w,h,yield)
+  local readu32=buffer.readu32
+  local buf=image:ReadPixelsBuffer(Vector2.zero,Vector2.new(w,h))
+  local memo={};local slice=os.clock()
+  for y=0,h-1 do
+   local row=y*w*4;local by=(y%4)*4
+   for x=0,w-1 do
+    local off=row+x*4;local v=readu32(buf,off)
+    if v>=16777216 and v<4278190080 then
+     local key=v*16+by+x%4;local out=memo[key]
+     if not out then local A=v//16777216;local rgb=v%16777216;out=overPixel(rgb%256,(rgb//256)%256,rgb//65536,A,x,y);memo[key]=out end
+     writeu32(buf,off,out)
+    end
+   end
+   if yield and os.clock()-slice>.002 then task.wait();slice=os.clock() end
+  end
+  image:WritePixelsBuffer(Vector2.zero,Vector2.new(w,h),buf)
+ end
  local function newImage(w,h) local image=AS:CreateEditableImage({Size=Vector2.new(w,h)});assert(image,'EditableImage allocation unavailable');return image end
  local function tiled(w,h,stripHeight)
   local list={};local step=stripHeight or LIMIT
@@ -539,14 +579,18 @@ local material=(function()
  -- sprite (the exact maths of that ring stack), shown in the real panel in place
  -- of its rings and used by the liquid too, so every surface shows the same glow.
  local orbSprites={}
- local function orbPixels(orb,size,D,yield)
+ local function orbPixels(orb,size,D,yield,comp)
   local c=size/2;local n=orb.rings;local keep=1-orb.alpha
-  local rgb=byte(orb.color.R)+byte(orb.color.G)*256+byte(orb.color.B)*65536
+  local R,G,B=byte(orb.color.R),byte(orb.color.G),byte(orb.color.B)
+  local rgb=R+G*256+B*65536
   local buf=buffer.create(size*size*4);local slice=os.clock()
   for y=0,size-1 do for x=0,size-1 do
    -- rings at scale 1-(j-1)/n*.92 cover this pixel: a count linear in radius
    local d=sqrt((x+.5-c)^2+(y+.5-c)^2);local count=clamp((1-2*d/D)*n/.92+.5,0,n)
-   if count>0 then writeu32(buf,(y*size+x)*4,rgb+round((1-keep^(count/n))*255)*16777216) end
+   if count>0 then
+    local A=round((1-keep^(count/n))*255)
+    writeu32(buf,(y*size+x)*4,if comp then overPixel(R,G,B,A,x,y) else rgb+A*16777216)
+   end
   end
    if yield and os.clock()-slice>.002 then task.wait();slice=os.clock() end
   end
@@ -556,7 +600,7 @@ local material=(function()
   local k=Layout.uiScale
   for i,orb in ipairs(orbData) do
    local D=orb.frame.Size.X.Offset*k;local size=ceil(D)+2
-   local image=newImage(size,size);image:WritePixelsBuffer(Vector2.zero,Vector2.new(size,size),orbPixels(orb,size,D))
+   local image=newImage(size,size);image:WritePixelsBuffer(Vector2.zero,Vector2.new(size,size),orbPixels(orb,size,D,false,true))
    -- the panel shows a white copy tinted by ImageColor3, so a theme recolours it at once;
    -- the coloured one is what the liquid's marble draws
    local white=newImage(size,size);white:WritePixelsBuffer(Vector2.zero,Vector2.new(size,size),orbPixels({color=Color3.new(1,1,1),rings=orb.rings,alpha=orb.alpha},size,D))
@@ -861,7 +905,7 @@ local material=(function()
      end
     end
    end
-   local topRGB=byte(tr)+byte(tg)*256+byte(tb)*65536
+   local TR,TG,TB=byte(tr),byte(tg),byte(tb)
    local rowT=.5+(v-.5)*sb
    for i=0,BW-1 do
     local px=i-MARGIN+.5;local dx=max(0,-px,px-Wp)
@@ -870,7 +914,7 @@ local material=(function()
     if dx>0 or dy>0 then local d=min(1,sqrt(dx*dx+dy*dy)/MARGIN);fade=d*d*(3-2*d);r=round(r+(ir-r)*fade);g=round(g+(ig-g)*fade);b=round(b+(ib-b)*fade) end
     local off=(j*BW+i)*4
     writeu32(baseBuf,off,r+g*256+b*65536+4278190080)
-    if ta>0 then writeu32(topBuf,off,topRGB+round(ta*(1-fade)*255)*16777216) end
+    if ta>0 then writeu32(topBuf,off,overPixel(TR,TG,TB,round(ta*(1-fade)*255),i,j)) end
    end
    if yield and os.clock()-slice>.002 then task.wait();slice=os.clock() end
   end
@@ -896,6 +940,7 @@ local material=(function()
      -- sub-pixel 0 of the tile is texel tile/2, keeping bilinear taps inside the 2x2 texture
      sub.image:DrawImageTransformed(Vector2.new(tile/2*s-sub.x,tile/2*s-sub.y),Vector2.new(s,s),0,texture,{CombineType=WRITE})
      sub.image:DrawRectangle(Vector2.zero,Vector2.new(sub.w,sub.h),resolve and resolve(label.ImageColor3) or label.ImageColor3,label.ImageTransparency,MUL)
+     compensateImage(sub.image,sub.w,sub.h,yield)
     end
     result.lava[#result.lava+1]={label=label,scale=Wp/max(1e-3,label.ImageRectSize.X),period=period,anchor=tile/2,subs=subs}
     if yield then task.wait() end
@@ -926,7 +971,7 @@ local material=(function()
     if ring then orb.color=res(ring.BackgroundColor3) end
     local sprite=orbSprites[i]
     if sprite then
-     local buf=orbPixels(orb,sprite.size,sprite.D,true)
+     local buf=orbPixels(orb,sprite.size,sprite.D,true,true)
      if token~=m.recolorToken then return end
      sprite.image:WritePixelsBuffer(Vector2.zero,Vector2.new(sprite.size,sprite.size),buf)
     end
@@ -945,6 +990,8 @@ local material=(function()
  end
  Resize.recolorMaterial=m.recolor
  -- Fast recolour (Rainbow): re-tint the coloured layers with native image ops
+ -- (these skip the blend compensation above; the full recolor() every few
+ -- seconds restores it)
  -- only: orb glows from their white copies, the lava tiles from the texture,
  -- veins and gloss by value. The base gradient is left as built (its tones are
  -- near-neutral); a full recolor() refreshes it now and then.
@@ -1005,12 +1052,13 @@ local material=(function()
    local start=dir>0 and lo or hi
    local used=min(strip.length,ceil((hi-lo)/math.abs(dir))+2)
    local buf,lut,rgb,n=strip.buf,vein.lut,vein.rgb,strip.length
+   local vr,vg,vb=rgb%256,(rgb//256)%256,rgb//65536
    buffer.fill(buf,0,0)
    for j=0,used-1 do
     local a=lut[round(((start+(j+.5)*dir)/L+.5-offset)*LUT)]
     if a and a>0 then
-     local value=rgb+round(a*255)*16777216
-     if rowsMode then for r=0,BLOCK-1 do writeu32(buf,(r*n+j)*4,value) end else for r=0,BLOCK-1 do writeu32(buf,(j*BLOCK+r)*4,value) end end
+     local A=round(a*255)
+     if rowsMode then for r=0,BLOCK-1 do writeu32(buf,(r*n+j)*4,overPixel(vr,vg,vb,A,j,r)) end else for r=0,BLOCK-1 do writeu32(buf,(j*BLOCK+r)*4,overPixel(vr,vg,vb,A,r,j)) end end
     end
    end
    if rowsMode then strip.rows:WritePixelsBuffer(Vector2.zero,Vector2.new(n,BLOCK),buf) else strip.cols:WritePixelsBuffer(Vector2.zero,Vector2.new(BLOCK,n),buf) end
