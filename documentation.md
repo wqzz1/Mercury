@@ -26,6 +26,11 @@ The library runs on the Roblox **client**. It was tested with Potassium, where `
 
 2. Create a window and add tabs and controls. Loading the file alone does not display a window.
 
+   ```lua
+   local window = Mercury:CreateWindow()
+   local main = window:CreateTab("Main", "home")
+   ```
+
 The examples below use `Mercury` for the returned library table.
 
 **Keep your feature script separate from the library source.** The loader line above returns Mercury's library table; it does not create a global variable. See [MyScriptExample.lua](./MyScriptExample.lua) for a complete feature script.
@@ -88,6 +93,8 @@ feature:CreateButton({
 
 return window
 ```
+
+`local state` is a table owned by this example script. It stores the feature's current values so your callbacks and game code can read them; Mercury does not require it.
 
 ## Windows and tabs
 
