@@ -42,11 +42,6 @@ The example below adds your feature logic to Mercury. The Settings tab already e
 ```lua
 local Mercury = loadstring(game:HttpGet("https://raw.githubusercontent.com/wqzz1/Mercury/main/Mercury.lua"))()
 
-local state = {
-    enabled = false,
-    amount = 25,
-}
-
 local window = Mercury:CreateWindow({
     Name = "MyScriptUI",
     Footer = "made by ego",
@@ -63,20 +58,16 @@ local featureToggle = feature:CreateToggle({
 })
 
 featureToggle:OnChanged(function(enabled)
-    state.enabled = enabled
     featureToggle:SetSubtitle(if enabled then "Feature is on" else nil)
 end)
 
-feature:CreateSlider({
+local amountSlider = feature:CreateSlider({
     Name = "Amount",
     Flag = "featureAmount",
     Min = 0,
     Max = 100,
     Increment = 1,
-    CurrentValue = state.amount,
-    Callback = function(value)
-        state.amount = value
-    end,
+    CurrentValue = 25,
 })
 
 feature:CreateButton({
@@ -85,7 +76,7 @@ feature:CreateButton({
     Callback = function()
         window:Notify({
             Title = "Run once",
-            Content = string.format("Enabled: %s · Amount: %d", tostring(state.enabled), state.amount),
+            Content = string.format("Enabled: %s · Amount: %d", tostring(featureToggle.Value), amountSlider.Value),
             Duration = 2.4,
         })
     end,
@@ -94,7 +85,7 @@ feature:CreateButton({
 return window
 ```
 
-`local state` is a table owned by this example script. It stores the feature's current values so your callbacks and game code can read them; Mercury does not require it.
+Mercury stores each control's current value in its `.Value` property. The notification reads the toggle and slider directly; your feature code can do the same.
 
 ## Windows and tabs
 

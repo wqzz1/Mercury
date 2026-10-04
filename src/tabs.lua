@@ -56,7 +56,7 @@ local function addTab(name: string, icon: string?)
     Layout.tabCount = #tabs + 1
     local parts = createTab(name, index)
     if icon then
-        local image = makeIcon(tabBar, icon, 13)
+        local image = makeIcon(tabBar, icon, 16)
         if image then
             parts.icon = image
         end

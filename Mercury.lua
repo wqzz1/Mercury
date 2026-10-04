@@ -1760,7 +1760,7 @@ local function addTab(name: string, icon: string?)
     Layout.tabCount = #tabs + 1
     local parts = createTab(name, index)
     if icon then
-        local image = makeIcon(tabBar, icon, 13)
+        local image = makeIcon(tabBar, icon, 16)
         if image then
             parts.icon = image
         end
@@ -2159,6 +2159,10 @@ do
             local y = math.clamp(center.Y, half, math.max(half, screen.Y - half))
             bubble.Position = UDim2.fromOffset(math.round(x), math.round(y))
         end
+        do
+            local screen = screenGui.AbsoluteSize
+            placeBubble(Vector2.new(screen.X / 2, math.max(BUBBLE * Layout.uiScale / 2 + 70, screen.Y * .12)))
+        end
 
 -- Integrated liquid renderer; isolated register frame, no gameplay dependencies.
 local liquid=(function()
@@ -2169,7 +2173,7 @@ local OW,OH=3,3
 local origin=Vector2.zero
 local tiles={}
 local surfaces={}
-local canvas=create("Frame",{Name="LiquidTransition",BackgroundTransparency=1,Size=UDim2.fromOffset(0,0),ZIndex=0,Visible=false,Parent=screenGui})
+local canvas=create("Frame",{Name="LiquidTransition",BackgroundTransparency=1,Size=UDim2.fromScale(1,1),ZIndex=0,Visible=false,Parent=screenGui})
 passThrough(canvas)
 -- Each surface lives in its own holder frame. A swap shows one holder and hides
 -- the other; nothing already on screen is ever repositioned (moving a parent and
@@ -4740,15 +4744,6 @@ end) if not fieldOk then warn('[LiquidField] disabled',fieldError) end end
             if state.closing then return end
             if Resize.animating then liquid.start(minimized,instant);return end
             if Resize.minimized == minimized then return end
-            if minimized then
-                local saved=nil
-                if typeof(saved)=="table" and typeof(saved[1])=="number" and typeof(saved[2])=="number" then placeBubble(Vector2.new(saved[1],saved[2]))
-                else
-                    -- default: centred horizontally, a little below the top bar
-                    local screen=screenGui.AbsoluteSize
-                    placeBubble(Vector2.new(screen.X/2,math.max(BUBBLE*Layout.uiScale/2+70,screen.Y*.12)))
-                end
-            end
             local ok,err=pcall(liquid.start,minimized,instant)
             if not ok then warn('[LiquidIntegration] transition unavailable',err);return end
             Resize.minimized=minimized
