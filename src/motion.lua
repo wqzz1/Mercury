@@ -1721,6 +1721,7 @@ local function restoreBackgrounds()
  table.clear(backgrounds)
 end
 local function hideBackgrounds()
+ if #backgrounds>0 then return end
  for _,name in ipairs({'Backdrop','Lens','Rim'}) do local item=panel:FindFirstChild(name);if item then backgrounds[#backgrounds+1]={item,item.Visible};item.Visible=false end end
 end
 local function hideBubbleBody()
@@ -1775,7 +1776,7 @@ local function resetFlow()
  flow.a=nil;flow.b=nil;flow.lead=0;flow.fadeLen=0;flow.fading=true
  if shownTiles then warp(0);blend(0) end
 end
-local CONTENT_FADE_SECONDS=.45
+local CONTENT_FADE_SECONDS=.25
 local instantFinish=false
 local contentFadingIn=false
 local function runPending()
@@ -1827,29 +1828,20 @@ function api.start(minimized,instant)
  if minimized then morph.pace*=1.3 end
  resetFlow()
  idle={}
- -- The morph clock starts at the click. The first picture renders over the next
- -- few frames under the frame budget while the panel (or the bubble) stays on
- -- screen, so it is drawn for the moment it will appear (the measured first-picture
- -- latency), not for the click: no frozen start followed by a jump. The content
- -- fade runs per frame from the click.
- --
- -- Minimize is different: its first picture is the whole panel, the costliest
- -- one, and how long it takes depends on how busy the game is. Drawn ahead for
- -- a guessed moment it could appear late, then the next picture caught up in
- -- one jump (the panel seemed to start, stop, then go on). So the shape clock
- -- starts when the liquid is actually on screen: the first picture is the panel
- -- exactly as it is (T=0), and the motion begins from rest the moment it shows.
- -- The contents fade from the click while the first liquid picture holds still.
- -- The shape starts moving only after that fade has finished.
- local started=os.clock()
- local fromReveal=minimized
- local lead=fromReveal and 0 or clamp(flow.firstLatency,.02,.07)
+ -- The restored panel's backdrop has no content fade; keep it hidden from the
+ -- first frame instead of letting it flash beside the still-visible bubble.
+ if not minimized then hideBackgrounds() end
+  -- Start each liquid surface at its actual endpoint. Hold that shape until its
+  -- first picture replaces the panel or bubble, so rendering latency cannot
+  -- make either endpoint jump ahead of the morph.
+  local started=os.clock()
+  local lead=0
  flow.clickTime=started
  flow.shotTime=started+lead;flow.lead=lead;flow.resetElapsed=true;flow.panelAlpha=nil;flow.iconAlpha=nil;flow.hideIn=nil;flow.revealed=false;flow.handoff=nil
  local function reveal()
   flow.firstLatency=flow.firstLatency*.5+min(.08,os.clock()-started)*.5
   showSurface();canvas.Visible=true;flow.revealed=true
-  if fromReveal then flow.shotTime=os.clock();flow.lead=0;flow.resetElapsed=true end
+   flow.shotTime=os.clock();flow.lead=0;flow.resetElapsed=true
   -- The backdrop (or bubble body) stays two more frames, until the liquid's first
   -- upload is certainly on screen; hiding it in the same frame showed one empty frame.
   flow.hideIn=2
@@ -1873,7 +1865,8 @@ step=function(dt,paced)
  end
  local pts,drops={},{}
  local completed=nil
-  if state=='morph' and (morph.dir==-1 or os.clock()-flow.clickTime>=CONTENT_FADE_SECONDS) then morph.t=min(1,morph.t+dt*speed/morph.pace) end
+  if state=='morph' and ((morph.dir==1 and os.clock()-flow.clickTime>=CONTENT_FADE_SECONDS)
+   or (morph.dir==-1 and flow.revealed and not flow.hideIn)) then morph.t=min(1,morph.t+dt*speed/morph.pace) end
   local T=state=='bubble' and 1 or (morph.dir==1 and morph.t or 1-morph.t)
   local g=ease(T);local mx=cx+(bx-cx)*g+morph.bend[1]*sin(pi*g)*.5;local my=cy+(by-cy)*g+morph.bend[2]*sin(pi*g)*.5
   local roundK=.85*ease(clamp(T/.3,0,1));local rx,ry=P.w*.5,P.h*.5
@@ -1986,7 +1979,7 @@ track(RunService.RenderStepped:Connect(function(dt)
  if flow.resetElapsed then flow.resetElapsed=false;elapsed=0 end
  elapsed+=dt;flow.frameDt=flow.frameDt*.9+min(dt,.05)*.1
  local ok,err=xpcall(function()
-  if flow.hideIn then flow.hideIn-=1;if flow.hideIn<=0 then flow.hideIn=nil;hideBackgrounds();hideBubbleBody() end end
+  if flow.hideIn then flow.hideIn-=1;if flow.hideIn<=0 then flow.hideIn=nil;hideBackgrounds();hideBubbleBody();if state=='morph' and morph and morph.dir==-1 then flow.shotTime=os.clock();flow.resetElapsed=true end end end
   if flow.retire then flow.retire.frames-=1;if flow.retire.frames<=0 then retireNow() end end
   -- The next marble sheet builds in the background on its own small slice.
   -- During a transition it goes first and the picture gets what is left of
@@ -2006,8 +1999,9 @@ track(RunService.RenderStepped:Connect(function(dt)
   if state~='bubble' then runSheet(.0015) end
   -- Hold the first panel picture while its contents fade out; do not keep
   -- rebuilding the same full-size liquid frame during this waiting stage.
-  local waitingForContent=state=='morph' and morph and morph.dir==1
-   and os.clock()-flow.clickTime<CONTENT_FADE_SECONDS
+   local waitingForContent=state=='morph' and morph and
+    ((morph.dir==1 and os.clock()-flow.clickTime<CONTENT_FADE_SECONDS)
+     or (morph.dir==-1 and (not flow.revealed or flow.hideIn)))
   if waitingForContent then elapsed=0 end
   -- finish the update in flight before starting the next one
   if pacing.task then resumeRender()
@@ -2026,7 +2020,8 @@ track(RunService.RenderStepped:Connect(function(dt)
   -- The panel contents fade out before minimize and in after restore. The
   -- bubble icon still follows the morph clock.
   if state=='morph' and morph then
-   local vt=if morph.dir==1 and os.clock()-flow.clickTime<CONTENT_FADE_SECONDS then 0
+    local vt=if (morph.dir==1 and os.clock()-flow.clickTime<CONTENT_FADE_SECONDS)
+     or (morph.dir==-1 and (not flow.revealed or flow.hideIn)) then 0
     else clamp(morph.t+(os.clock()-flow.shotTime)*speed/morph.pace,0,1)
    local VT=morph.dir==1 and vt or 1-vt
    -- Minimize fades the contents before the shape moves. Restore fades in after it returns.

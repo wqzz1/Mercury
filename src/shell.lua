@@ -625,15 +625,47 @@ corner(toastBase, 18)
 create("UIGradient", {
     Rotation = 125,
     Color = colorSeq({
-        {0, Color3.fromRGB(7, 7, 10)},
-        {0.4, Color3.fromRGB(22, 21, 27)},
-        {0.7, Color3.fromRGB(28, 20, 42)},
-        {1, Color3.fromRGB(7, 7, 10)},
+        {0, Color3.fromRGB(9, 7, 17)},
+        {0.4, Color3.fromRGB(27, 18, 44)},
+        {0.7, Color3.fromRGB(38, 22, 63)},
+        {1, Color3.fromRGB(11, 8, 21)},
     }),
     Parent = toastBase,
 })
-specularRim(toast, 1.3, 0.1)
+if lavaAsset then
+    local toastMarble = create("ImageLabel", {
+        Name = "MarbleLava",
+        BackgroundTransparency = 1,
+        Size = UDim2.fromScale(1, 1),
+        Image = lavaAsset,
+        ImageColor3 = Color3.fromRGB(150, 90, 240),
+        ImageTransparency = 0.38,
+        ImageRectOffset = Vector2.new(25, 20),
+        ImageRectSize = Vector2.new(105, 32),
+        ZIndex = 10,
+        Parent = toastBase,
+    })
+    corner(toastMarble, 18)
+end
+local toastRim = create("UIStroke", {
+    Color = Theme.lilac,
+    Transparency = 0.48,
+    Thickness = 1,
+    ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+    Parent = toast,
+})
+create("UIGradient", {
+    Rotation = 90,
+    Transparency = numberSeq({{0, 0.1}, {0.5, 0.65}, {1, 0.35}}),
+    Parent = toastRim,
+})
 liquidWave(toast, TOAST_SIZE.X, TOAST_SIZE.Y, 18, 10)
+for _, layer in toast:GetChildren() do
+    if layer.Name == "LiquidWater" then
+        layer.ImageColor3 = Theme.violet
+        layer.ImageTransparency = math.max(layer.ImageTransparency, 0.83)
+    end
+end
 sheen(toast, 18, 10)
 local toastTitle: TextLabel = create("TextLabel", {
     BackgroundTransparency = 1,
