@@ -1000,51 +1000,81 @@ local themeHistory = {} -- recent rainbow palettes, so leaving Rainbow finds eve
 function window:SetTheme(theme)
     rainbowToken += 1
     if theme == "Rainbow" then
-        -- The hue drifts through every colour (a full turn in ~25 s). The window's
-        -- frames follow it every tick; the marble the liquid draws is rebuilt back
-        -- to back in the background for the hue it was started with. While the
-        -- liquid shows (minimizing, minimized) the frames hold the marble's hue,
-        -- so the two always match.
+        -- The hue drifts through every colour (a full turn in ~25 s). Every themed
+        -- colour property is watched (new instances join as they appear); each tick
+        -- reads its value, finds its role among recent palettes and sets the new
+        -- colour, so no periodic full rescan (that hitched every 2 s). The liquid's
+        -- marble is re-tinted with native image ops every 0.3 s and fully rebuilt
+        -- in the background every 6 s.
         local token = rainbowToken
         self.Theme = "Rainbow"
         task.spawn(function()
             local hue = (Theme.violet:ToHSV())
             local history = themeHistory
             table.clear(history); table.insert(history, table.clone(Theme))
-            local bindings, scanned = nil, 0
-            local building, built, held, lastBuild = false, nil, nil, 0
-            local function rainbowPalette(h) return tintPalette({hue = h, sat = RainbowTint.sat, value = RainbowTint.value}) end
-            local function startBuild(h)
-                if building or not Resize.recolorMaterial then return end
-                building = true
-                local palette, known = rainbowPalette(h), knownColors(history)
-                local ok = pcall(Resize.recolorMaterial, function(c)
-                    local key = known[colorKey(c)]
-                    return if key then palette[key] else c
-                end, function()
-                    building = false
-                    built = palette
-                end)
-                if not ok then building = false end
+            local known = knownColors(history)
+            local watch = {}
+            local function watchInstance(o)
+                if keepColor(o) then return end
+                if o:IsA("GuiObject") then
+                    watch[#watch + 1] = {o, "BackgroundColor3"}
+                    if o:IsA("TextLabel") or o:IsA("TextButton") or o:IsA("TextBox") then
+                        watch[#watch + 1] = {o, "TextColor3"}
+                        if o:IsA("TextBox") then watch[#watch + 1] = {o, "PlaceholderColor3"} end
+                    elseif o:IsA("ImageLabel") or o:IsA("ImageButton") then
+                        watch[#watch + 1] = {o, "ImageColor3"}
+                    end
+                elseif o:IsA("UIStroke") then
+                    watch[#watch + 1] = {o, "Color"}
+                elseif o:IsA("UIGradient") then
+                    watch[#watch + 1] = {o, "Gradient"}
+                end
             end
+            for _, o in screenGui:GetDescendants() do watchInstance(o) end
+            local added = screenGui.DescendantAdded:Connect(function(o) task.defer(function() if o.Parent then watchInstance(o) end end) end)
+            local ticks, lastFast, lastLava, lastFull = 0, 0, 0, os.clock()
             while token == rainbowToken and not state.destroyed do
                 local now = os.clock()
-                if not bindings or now - scanned > 2 then bindings = scanThemed(knownColors(history)); scanned = now end
-                local liquidShowing = Resize.animating or Resize.minimized
-                if liquidShowing and built then
-                    if held ~= built then held = built; applyPalette(built, bindings); table.insert(history, built) end
-                else
-                    held = nil
-                    local palette = rainbowPalette(hue)
-                    applyPalette(palette, bindings)
-                    table.insert(history, palette)
-                    if #history > 60 then table.remove(history, 1) end
+                local palette = tintPalette({hue = hue, sat = RainbowTint.sat, value = RainbowTint.value})
+                for i = #watch, 1, -1 do
+                    local item = watch[i]
+                    local o, prop = item[1], item[2]
+                    if not o.Parent then
+                        watch[i] = watch[#watch]; watch[#watch] = nil
+                    elseif prop == "Gradient" then
+                        local keys, changed = {}, false
+                        for j, point in o.Color.Keypoints do
+                            local key = known[colorKey(point.Value)]
+                            if key then changed = true end
+                            keys[j] = ColorSequenceKeypoint.new(point.Time, if key then palette[key] else point.Value)
+                        end
+                        if changed then o.Color = ColorSequence.new(keys) end
+                    else
+                        local key = known[colorKey(o[prop])]
+                        if key then o[prop] = palette[key] end
+                    end
                 end
-                -- one marble rebuild per second at most (each costs a little every frame while it runs)
-                if now - lastBuild > 1 then lastBuild = now; startBuild(hue) end
+                applyPalette(palette, {})
+                table.insert(history, palette)
+                for _, role in ThemeRoles do known[colorKey(palette[role.key])] = role.key end
+                ticks += 1
+                if #history > 60 then table.remove(history, 1) end
+                if ticks % 60 == 0 then known = knownColors(history) end
+                if now - lastFast > 0.3 and Resize.recolorMaterialFast then
+                    lastFast = now
+                    -- the lava strips (the costly part) re-tint about once a second, one strip per frame
+                    local withLava = now - lastLava > 1
+                    if withLava then lastLava = now end
+                    pcall(Resize.recolorMaterialFast, function(c)
+                        local key = known[colorKey(c)]
+                        return if key then palette[key] else c
+                    end, withLava)
+                end
+                if now - lastFull > 6 and Resize.recolorMaterial then lastFull = now; pcall(Resize.recolorMaterial) end
                 hue = (hue + 0.004) % 1
                 task.wait(0.1)
             end
+            added:Disconnect()
         end)
         return self
     end
