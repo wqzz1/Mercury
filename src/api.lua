@@ -294,47 +294,206 @@ local function addKeybind(container, config)
 end
 local function addColorPicker(container, config)
     assert(typeof(config) == "table", "ColorPicker needs an options table")
-    local frame = row(container, config.Name or "ColorPicker", Layout.buttonHeight)
-    local button, label = glassButton(frame, config.Name or "ColorPicker", config.Name or "ColorPicker", 0, Layout.buttonHeight)
+    local headerHeight, openHeight = Layout.buttonHeight, 360
+    local frame = row(container, config.Name or "ColorPicker", headerHeight)
+    local button, label = glassButton(frame, config.Name or "ColorPicker", config.Name or "ColorPicker", 0, headerHeight)
     label.TextXAlignment = Enum.TextXAlignment.Left
     label.Position = UDim2.fromOffset(20, 0)
-    label.Size = UDim2.new(1, -115, 1, 0)
+    label.Size = UDim2.new(1, -160, 1, 0)
+    local hexValue = create("TextLabel", {Name = "HexValue", BackgroundTransparency = 1,
+        Position = UDim2.new(1, -126, 0, 0), Size = UDim2.fromOffset(70, headerHeight),
+        FontFace = font(Enum.FontWeight.SemiBold), TextSize = 12, TextColor3 = Theme.mistDim,
+        TextXAlignment = Enum.TextXAlignment.Right, ZIndex = 5, Parent = button})
     local swatch = create("Frame", {Name = "Swatch", BorderSizePixel = 0,
-        Position = UDim2.new(1, -48, 0.5, -12), Size = UDim2.fromOffset(28, 24),
+        Position = UDim2.new(1, -50, 0.5, -11), Size = UDim2.fromOffset(22, 22),
         BackgroundColor3 = config.CurrentValue or Color3.new(1, 1, 1), ZIndex = 5, Parent = button})
-    corner(swatch, 7); specularRim(swatch)
-    local fields = create("Frame", {BackgroundTransparency = 1, Position = UDim2.fromOffset(Layout.padX, Layout.buttonHeight),
-        Size = UDim2.new(1, -Layout.padX * 2, 0, 32), Visible = false, Parent = frame})
-    local boxes = {}
-    for i, name in {"R", "G", "B"} do
-        boxes[i] = create("TextBox", {Name = name, BackgroundColor3 = Theme.mist,
-            BackgroundTransparency = 0.88, BorderSizePixel = 0, Position = UDim2.new((i - 1) / 3, 2, 0, 0),
-            Size = UDim2.new(1 / 3, -6, 0, 28), FontFace = font(), TextSize = 12,
-            TextColor3 = Theme.mist, ZIndex = 5, Parent = fields})
-        corner(boxes[i], 8)
+    corner(swatch, UDim.new(0.5, 0)); specularRim(swatch, 1.5, 0.08)
+    local chevron = create("TextLabel", {Name = "Chevron", BackgroundTransparency = 1,
+        Position = UDim2.new(1, -24, 0, 0), Size = UDim2.fromOffset(16, headerHeight),
+        FontFace = font(Enum.FontWeight.SemiBold), Text = "⌄", TextSize = 17,
+        TextColor3 = Theme.mistDim, ZIndex = 5, Parent = button})
+    local fields = create("Frame", {Name = "PickerFields", BackgroundTransparency = 1,
+        Position = UDim2.fromOffset(Layout.padX, headerHeight + 10),
+        Size = UDim2.new(1, -Layout.padX * 2, 0, openHeight - headerHeight - 10),
+        Visible = false, Parent = frame})
+    local shade = create("Frame", {Name = "Shade", BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 0, 158), ZIndex = 3, Parent = fields})
+    corner(shade, 14); specularRim(shade, 1, 0.5)
+    local white = create("Frame", {BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0,
+        Size = UDim2.fromScale(1, 1), ZIndex = 4, Parent = shade})
+    corner(white, 14)
+    create("UIGradient", {Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1)}), Parent = white})
+    local black = create("Frame", {BackgroundColor3 = Color3.new(0, 0, 0), BorderSizePixel = 0,
+        Size = UDim2.fromScale(1, 1), ZIndex = 5, Parent = shade})
+    corner(black, 14)
+    create("UIGradient", {Rotation = 90, Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(1, 0)}), Parent = black})
+    local shadeHit = create("TextButton", {Name = "ShadeInput", Text = "", BackgroundTransparency = 1,
+        Size = UDim2.fromScale(1, 1), ZIndex = 6, Parent = shade})
+    local shadeKnob = create("Frame", {Name = "ShadeKnob", AnchorPoint = Vector2.new(0.5, 0.5),
+        Size = UDim2.fromOffset(16, 16), BorderSizePixel = 0, ZIndex = 7, Parent = shade})
+    corner(shadeKnob, UDim.new(0.5, 0))
+    create("UIStroke", {Color = Color3.new(1, 1, 1), Thickness = 2.5, Parent = shadeKnob})
+    local function caption(name, y)
+        return create("TextLabel", {Name = name .. "Label", BackgroundTransparency = 1,
+            Position = UDim2.fromOffset(0, y), Size = UDim2.new(1, 0, 0, 13),
+            FontFace = font(Enum.FontWeight.SemiBold), Text = name, TextSize = 10,
+            TextColor3 = Theme.mistDim, TextXAlignment = Enum.TextXAlignment.Left,
+            ZIndex = 4, Parent = fields})
     end
+    local function track(name, y)
+        caption(name, y)
+        local bar = create("Frame", {Name = name .. "Track", BorderSizePixel = 0,
+            Position = UDim2.fromOffset(0, y + 20), Size = UDim2.new(1, 0, 0, 14),
+            ZIndex = 4, Parent = fields})
+        corner(bar, UDim.new(0.5, 0)); specularRim(bar, 1, 0.5)
+        local hit = create("TextButton", {Name = "Input", Text = "", BackgroundTransparency = 1,
+            Size = UDim2.fromScale(1, 1), ZIndex = 5, Parent = bar})
+        local knob = create("Frame", {Name = "Knob", AnchorPoint = Vector2.new(0.5, 0.5),
+            Position = UDim2.fromScale(0, 0.5), Size = UDim2.fromOffset(18, 18),
+            BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 6, Parent = bar})
+        corner(knob, UDim.new(0.5, 0))
+        create("UIStroke", {Color = Color3.new(1, 1, 1), Thickness = 2.5, Parent = knob})
+        return bar, hit, knob
+    end
+    local hueBar, hueHit, hueKnob = track("HUE", 174)
+    create("UIGradient", {Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 0, 0)),
+        ColorSequenceKeypoint.new(1/6, Color3.fromRGB(255, 255, 0)),
+        ColorSequenceKeypoint.new(2/6, Color3.fromRGB(0, 255, 0)),
+        ColorSequenceKeypoint.new(3/6, Color3.fromRGB(0, 255, 255)),
+        ColorSequenceKeypoint.new(4/6, Color3.fromRGB(0, 0, 255)),
+        ColorSequenceKeypoint.new(5/6, Color3.fromRGB(255, 0, 255)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 0, 0)),
+    }), Parent = hueBar})
+    local brightBar, brightHit, brightKnob = track("BRIGHTNESS", 219)
+    local brightGradient = create("UIGradient", {Parent = brightBar})
+    caption("HEX", 267)
+    local hexHolder = create("Frame", {Name = "HexField", BackgroundColor3 = Theme.tint,
+        BackgroundTransparency = 0.35, BorderSizePixel = 0,
+        Position = UDim2.fromOffset(38, 260), Size = UDim2.new(1, -38, 0, 38),
+        ZIndex = 4, Parent = fields})
+    corner(hexHolder, UDim.new(0.5, 0)); specularRim(hexHolder, 1, 0.5)
+    create("TextLabel", {BackgroundTransparency = 1, Position = UDim2.fromOffset(12, 0),
+        Size = UDim2.fromOffset(12, 38), FontFace = font(Enum.FontWeight.SemiBold),
+        Text = "#", TextSize = 15, TextColor3 = Theme.mistDim, ZIndex = 5, Parent = hexHolder})
+    local hexBox = create("TextBox", {Name = "HexInput", BackgroundTransparency = 1,
+        Position = UDim2.fromOffset(27, 0), Size = UDim2.new(1, -38, 1, 0),
+        FontFace = font(Enum.FontWeight.SemiBold), Text = "", PlaceholderText = "RRGGBB",
+        TextSize = 14, TextColor3 = Theme.mist, PlaceholderColor3 = Theme.mistDim,
+        TextXAlignment = Enum.TextXAlignment.Left, ClearTextOnFocus = false,
+        ZIndex = 5, Parent = hexHolder})
     local obj = controlBase("ColorPicker", frame, swatch.BackgroundColor3, config.Callback, config.Flag)
+    local hue, saturation, shadeValue = obj.Value:ToHSV()
+    local brightness = 0
+    local editingHex = false
+    local function hexOf(color)
+        return string.format("#%02X%02X%02X", math.round(color.R * 255), math.round(color.G * 255), math.round(color.B * 255))
+    end
+    local function baseColor()
+        return Color3.fromHSV(hue, saturation, shadeValue)
+    end
+    local function mixedColor()
+        local base = baseColor()
+        local target = if brightness < 0 then Color3.new(1, 1, 1) else Color3.new(0, 0, 0)
+        return base:Lerp(target, math.abs(brightness))
+    end
+    local function render()
+        local base = baseColor()
+        local color = mixedColor()
+        shade.BackgroundColor3 = Color3.fromHSV(hue, 1, 1)
+        shadeKnob.BackgroundColor3 = base
+        shadeKnob.Position = UDim2.fromScale(saturation, 1 - shadeValue)
+        hueKnob.Position = UDim2.fromScale(hue, 0.5)
+        brightKnob.Position = UDim2.fromScale((brightness + 1) / 2, 0.5)
+        brightGradient.Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)),
+            ColorSequenceKeypoint.new(0.5, base),
+            ColorSequenceKeypoint.new(1, Color3.new(0, 0, 0)),
+        })
+        swatch.BackgroundColor3 = color
+        hexValue.Text = hexOf(color)
+        if not editingHex then hexBox.Text = string.sub(hexValue.Text, 2) end
+    end
+    local function updateColor()
+        local color = mixedColor()
+        if color == obj.Value then render(); return end
+        obj.Value = color
+        render()
+        obj:_emit(color)
+    end
     function obj:Set(value, silent)
         assert(typeof(value) == "Color3", "ColorPicker:Set expects Color3")
+        local newHue, newSaturation, newValue = value:ToHSV()
+        if newSaturation > 0 and newValue > 0 then hue = newHue end
+        saturation, shadeValue, brightness = newSaturation, newValue, 0
+        local changed = self.Value ~= value
         self.Value = value
-        swatch.BackgroundColor3 = value
-        boxes[1].Text = tostring(math.round(value.R * 255))
-        boxes[2].Text = tostring(math.round(value.G * 255))
-        boxes[3].Text = tostring(math.round(value.B * 255))
-        if not silent then self:_emit(value) end
+        render()
+        if changed and not silent then self:_emit(value) end
         return self
     end
     obj:Set(obj.Value, true)
-    local function update()
+    local dragging = nil
+    local function fromPointer(kind, pointer)
         if obj.Disabled then return end
-        local r, g, b = tonumber(boxes[1].Text), tonumber(boxes[2].Text), tonumber(boxes[3].Text)
-        if r and g and b then obj:Set(Color3.fromRGB(math.clamp(r, 0, 255), math.clamp(g, 0, 255), math.clamp(b, 0, 255))) end
+        if kind == "shade" then
+            local pos, size = shade.AbsolutePosition, shade.AbsoluteSize
+            saturation = math.clamp((pointer.X - pos.X) / math.max(1, size.X), 0, 1)
+            shadeValue = 1 - math.clamp((pointer.Y - pos.Y) / math.max(1, size.Y), 0, 1)
+        else
+            local bar = if kind == "hue" then hueBar else brightBar
+            local fraction = math.clamp((pointer.X - bar.AbsolutePosition.X) / math.max(1, bar.AbsoluteSize.X), 0, 1)
+            if kind == "hue" then hue = fraction else
+                brightness = fraction * 2 - 1
+                if math.abs(brightness) < 0.04 then brightness = 0 end
+            end
+        end
+        updateColor()
     end
-    for _, box in boxes do obj:Bind(box.FocusLost:Connect(update)) end
+    for _, part in {{shadeHit, "shade"}, {hueHit, "hue"}, {brightHit, "brightness"}} do
+        obj:Bind(part[1].InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = part[2]
+                fromPointer(dragging, input.Position)
+            end
+        end))
+    end
+    obj:Bind(UserInputService.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            fromPointer(dragging, input.Position)
+        end
+    end))
+    obj:Bind(UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then dragging = nil end
+    end))
+    obj:Bind(hexBox.Focused:Connect(function()
+        editingHex = true
+    end))
+    obj:Bind(hexBox:GetPropertyChangedSignal("Text"):Connect(function()
+        if not editingHex then return end
+        local cleaned = string.upper(string.gsub(hexBox.Text, "[^%x]", "")):sub(1, 6)
+        if cleaned ~= hexBox.Text then hexBox.Text = cleaned end
+        if #cleaned == 6 then
+            local r = tonumber(cleaned:sub(1, 2), 16)
+            local g = tonumber(cleaned:sub(3, 4), 16)
+            local b = tonumber(cleaned:sub(5, 6), 16)
+            obj:Set(Color3.fromRGB(r, g, b))
+        end
+    end))
+    obj:Bind(hexBox.FocusLost:Connect(function()
+        if #hexBox.Text == 3 then
+            local t = hexBox.Text
+            obj:Set(Color3.fromRGB(tonumber(t:sub(1, 1) .. t:sub(1, 1), 16),
+                tonumber(t:sub(2, 2) .. t:sub(2, 2), 16), tonumber(t:sub(3, 3) .. t:sub(3, 3), 16)))
+        end
+        editingHex = false
+        render()
+    end))
     obj:Bind(button.MouseButton1Click:Connect(function()
         if obj.Disabled then return end
         fields.Visible = not fields.Visible
-        frame.Size = UDim2.new(1, 0, 0, Layout.buttonHeight + (if fields.Visible then 32 else 0))
+        chevron.Rotation = if fields.Visible then 180 else 0
+        frame.Size = UDim2.new(1, 0, 0, if fields.Visible then openHeight else headerHeight)
     end))
     return obj
 end

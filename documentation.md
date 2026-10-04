@@ -258,7 +258,7 @@ local color = main:CreateColorPicker({
 color:Set(Color3.fromRGB(160, 120, 240))
 ```
 
-Click the control to reveal RGB fields. Each channel accepts a value from 0 to 255.
+Click the control to expand the picker. Drag in the shade square to set saturation and value, use **HUE** to choose a color, and use **BRIGHTNESS** to blend it toward white or black. The header shows the current hex color. Enter a six-digit hex value in the **HEX** field (or a three-digit shorthand and leave the field). `Callback` and `Set` use `Color3` values.
 
 ### Labels, paragraphs, and dividers
 
