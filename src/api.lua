@@ -649,7 +649,7 @@ function window:CreateTab(name, icon)
         local heading = create("TextLabel", {Name = "Heading", BackgroundTransparency = 1,
             Position = UDim2.fromOffset(TITLE_X, 0), Size = UDim2.new(1, -(TITLE_X + Layout.padX), 0, HEAD_H),
             FontFace = font(Enum.FontWeight.Bold), Text = string.upper(title),
-            TextColor3 = Theme.mist, TextTransparency = 0.18, TextSize = 11,
+            TextColor3 = Color3.new(1, 1, 1), TextTransparency = 0.18, TextSize = 11, -- white: the glint UIGradient supplies the mist tint (gradients multiply the text colour)
             TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Center, Parent = holder})
         local mark = create("Frame", {Name = "Rule", BackgroundTransparency = 1,
             Position = UDim2.fromOffset(Layout.padX, HEAD_H / 2 - 2), Size = UDim2.new(1, -Layout.padX * 2, 0, 4), Parent = holder})

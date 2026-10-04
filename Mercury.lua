@@ -3695,7 +3695,8 @@ step=function(dt,paced)
      if t<d.bud then dist=R-4+(1-(1-t/d.bud)^3)*d.out
      elseif t<d.bud+d.float then local u=(t-d.bud)/d.float;a+=d.spin*(t-d.bud);dist=R-4+d.out+sin((t-d.bud)*d.bob*2+d.phase)*5;r*=1+.08*sin((t-d.bud)*5)
       if d.split then local s=sin(pi*min(1,u*1.15));sep=s*r*1.5;spin=(t-d.bud)*d.splitSpin;r=max(8,r*(1-.12*s)) end
-     else local k=(t-d.bud-d.float)/d.back;local pull=-(cos(pi*min(1,k*1.05))-1)/2;a+=d.spin*d.float+d.spin*.4*d.back*(1-(1-k)^2);dist=R-4+d.out*(1-pull)+sin((t-d.bud)*d.bob*2+d.phase)*5*(1-pull) end
+     else local k=(t-d.bud-d.float)/d.back;local pull=-(cos(pi*min(1,k*1.05))-1)/2;a+=d.spin*d.float+d.spin*.4*d.back*(1-(1-k)^2);dist=R-4+d.out*(1-pull)+sin((t-d.bud)*d.bob*2+d.phase)*5*(1-pull)
+       local sink=clamp((k-.55)/.45,0,1);sink=sink*sink*(3-2*sink);dist-=sink*(r+3);r*=1-.5*sink end
      local x,y=bx+cos(a)*dist,by+sin(a)*dist
      if sep>0 then for _,o in ipairs({0,pi}) do drops[#drops+1]={x+cos(spin+o)*sep,y+sin(spin+o)*sep,r} end else drops[#drops+1]={x,y,r} end
     end
@@ -4350,7 +4351,8 @@ local function idleDrops(state,cx,cy,R,limit,list)
    if t<d.bud then dist=R-4*scale+(1-(1-t/d.bud)^3)*d.out
    elseif t<d.bud+d.float then local u=(t-d.bud)/d.float;a+=d.spin*(t-d.bud);dist=R-4*scale+d.out+sin((t-d.bud)*d.bob*2+d.phase)*bob;r*=1+.08*sin((t-d.bud)*5)
     if d.split then local s=sin(pi*min(1,u*1.15));sep=s*r*1.5;spin=(t-d.bud)*d.splitSpin;r=max(8,r*(1-.12*s)) end
-   else local k=(t-d.bud-d.float)/d.back;local pull=-(cos(pi*min(1,k*1.05))-1)/2;a+=d.spin*d.float+d.spin*.4*d.back*(1-(1-k)^2);dist=R-4*scale+d.out*(1-pull)+sin((t-d.bud)*d.bob*2+d.phase)*bob*(1-pull) end
+   else local k=(t-d.bud-d.float)/d.back;local pull=-(cos(pi*min(1,k*1.05))-1)/2;a+=d.spin*d.float+d.spin*.4*d.back*(1-(1-k)^2);dist=R-4*scale+d.out*(1-pull)+sin((t-d.bud)*d.bob*2+d.phase)*bob*(1-pull)
+     local sink=clamp((k-.55)/.45,0,1);sink=sink*sink*(3-2*sink);dist-=sink*(r+3*scale);r*=1-.5*sink end
    local x,y=cx+cos(a)*dist,cy+sin(a)*dist
    if sep>0 then for _,o in ipairs({0,pi}) do list[#list+1]={x+cos(spin+o)*sep,y+sin(spin+o)*sep,r} end else list[#list+1]={x,y,r} end
   end
@@ -4443,7 +4445,7 @@ do
    local arc=rand(0,L)
    local x,y=outlineAt(arc,w,h,r)
    local clear=not (x>w-60 and y>h-60)
-   for _,d in ipairs(drops) do local gap=math.abs((d.arc-arc+L/2)%L-L/2);if gap<95 then clear=false end end
+   for _,d in ipairs(drops) do local gap=math.abs((d.arc-arc+L/2)%L-L/2);if gap<150 then clear=false end end
    if clear then
     drops[#drops+1]={slot=slot(),start=clock,bud=rand(.7,1.1),float=rand(1.4,3.6),back=rand(1.6,2.6),arc=arc,out=rand(.7,1.15)*REF_R,r=rand(8.5,11.5),speed=rand(.25,.7)*REF_R*(rand(0,1)<.5 and -1 or 1),bob=rand(.6,1.4),phase=rand(0,2*pi),split=rand(0,1)<.4,splitSpin=rand(2.5,4.5)}
     return
@@ -4500,7 +4502,9 @@ do
      if t<d.bud then off=-4+(1-(1-t/d.bud)^3)*d.out
      elseif t<d.bud+d.float then local u=(t-d.bud)/d.float;arc+=d.speed*(t-d.bud);off=-4+d.out+sin((t-d.bud)*d.bob*2+d.phase)*5;radius*=1+.08*sin((t-d.bud)*5)
       if d.split then local s=sin(pi*min(1,u*1.15));sep=s*radius*1.5;spin=(t-d.bud)*d.splitSpin;radius=max(8,radius*(1-.12*s)) end
-     else local q=(t-d.bud-d.float)/d.back;local pull=-(cos(pi*min(1,q*1.05))-1)/2;arc+=d.speed*d.float+d.speed*.4*d.back*(1-(1-q)^2);off=-4+d.out*(1-pull)+sin((t-d.bud)*d.bob*2+d.phase)*5*(1-pull) end
+     else local q=(t-d.bud-d.float)/d.back;local pull=-(cos(pi*min(1,q*1.05))-1)/2;arc+=d.speed*d.float+d.speed*.4*d.back*(1-(1-q)^2);off=-4+d.out*(1-pull)+sin((t-d.bud)*d.bob*2+d.phase)*5*(1-pull)
+       -- last stretch: shrink and sink fully inside the edge, so removing the droplet changes nothing on screen (it used to vanish while still bulging = a snap)
+       local sink=clamp((q-.55)/.45,0,1);sink=sink*sink*(3-2*sink);off-=sink*(radius+3);radius*=1-.5*sink end
      local ex,ey,nx,ny=outlineAt(arc,w,h,r)
      local cx0,cy0=ex+nx*off,ey+ny*off
      local bodies={}
@@ -5686,7 +5690,7 @@ function window:CreateTab(name, icon)
         local heading = create("TextLabel", {Name = "Heading", BackgroundTransparency = 1,
             Position = UDim2.fromOffset(TITLE_X, 0), Size = UDim2.new(1, -(TITLE_X + Layout.padX), 0, HEAD_H),
             FontFace = font(Enum.FontWeight.Bold), Text = string.upper(title),
-            TextColor3 = Theme.mist, TextTransparency = 0.18, TextSize = 11,
+            TextColor3 = Color3.new(1, 1, 1), TextTransparency = 0.18, TextSize = 11, -- white: the glint UIGradient supplies the mist tint (gradients multiply the text colour)
             TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Center, Parent = holder})
         local mark = create("Frame", {Name = "Rule", BackgroundTransparency = 1,
             Position = UDim2.fromOffset(Layout.padX, HEAD_H / 2 - 2), Size = UDim2.new(1, -Layout.padX * 2, 0, 4), Parent = holder})
