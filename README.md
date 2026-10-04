@@ -13,7 +13,7 @@ local main = window:CreateTab("Main", "home")
 main:CreateButton({Name = "Run", Callback = function() print("Run") end})
 ```
 
-The header fetches the current game's title. A Settings tab is built in and reserved for UI settings. See [documentation.md](./documentation.md) for the full API, [MyScriptExample.lua](./MyScriptExample.lua) for a basic script, and [HighlightESPExample.lua](./HighlightESPExample.lua) for a Highlight ESP example with outline and fill color pickers.
+The header fetches the current game's title. A Settings tab is built in and reserved for UI settings. See [documentation.md](./documentation.md) for the full API, and [MyScriptExample.lua](./MyScriptExample.lua) for a basic script.
 
 ## Source
 
