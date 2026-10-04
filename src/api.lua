@@ -312,12 +312,18 @@ local function addColorPicker(container, config)
         Position = UDim2.new(1, -24, 0, 0), Size = UDim2.fromOffset(16, headerHeight),
         FontFace = font(Enum.FontWeight.SemiBold), Text = "⌄", TextSize = 17,
         TextColor3 = Theme.mistDim, ZIndex = 5, Parent = button})
-    local fields = create("Frame", {Name = "PickerFields", BackgroundTransparency = 1,
-        Position = UDim2.fromOffset(Layout.padX, headerHeight + 10),
-        Size = UDim2.new(1, -Layout.padX * 2, 0, openHeight - headerHeight - 10),
-        Visible = false, Parent = frame})
+    local fields = create("Frame", {Name = "PickerFields", BackgroundColor3 = Theme.tint,
+        BackgroundTransparency = 0.08, BorderSizePixel = 0,
+        AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, headerHeight + 8),
+        Size = UDim2.new(1, -Layout.padX * 2, 0, 310),
+        Visible = false, ZIndex = 3, Parent = frame})
+    corner(fields, 12); specularRim(fields)
+    create("UISizeConstraint", {MaxSize = Vector2.new(270, 310), Parent = fields})
+    local content = create("Frame", {BackgroundTransparency = 1,
+        Position = UDim2.fromOffset(12, 6), Size = UDim2.new(1, -24, 1, -12),
+        ZIndex = 3, Parent = fields})
     local shade = create("Frame", {Name = "Shade", BorderSizePixel = 0,
-        Size = UDim2.new(1, 0, 0, 158), ZIndex = 3, Parent = fields})
+        Size = UDim2.new(1, 0, 0, 158), ZIndex = 3, Parent = content})
     corner(shade, 14); specularRim(shade, 1, 0.5)
     local white = create("Frame", {BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0,
         Size = UDim2.fromScale(1, 1), ZIndex = 4, Parent = shade})
@@ -338,13 +344,13 @@ local function addColorPicker(container, config)
             Position = UDim2.fromOffset(0, y), Size = UDim2.new(1, 0, 0, 13),
             FontFace = font(Enum.FontWeight.SemiBold), Text = name, TextSize = 10,
             TextColor3 = Theme.mistDim, TextXAlignment = Enum.TextXAlignment.Left,
-            ZIndex = 4, Parent = fields})
+            ZIndex = 4, Parent = content})
     end
     local function track(name, y)
         caption(name, y)
         local bar = create("Frame", {Name = name .. "Track", BorderSizePixel = 0,
             Position = UDim2.fromOffset(0, y + 20), Size = UDim2.new(1, 0, 0, 14),
-            ZIndex = 4, Parent = fields})
+            ZIndex = 4, Parent = content})
         corner(bar, UDim.new(0.5, 0)); specularRim(bar, 1, 0.5)
         local hit = create("TextButton", {Name = "Input", Text = "", BackgroundTransparency = 1,
             Size = UDim2.fromScale(1, 1), ZIndex = 5, Parent = bar})
@@ -371,7 +377,7 @@ local function addColorPicker(container, config)
     local hexHolder = create("Frame", {Name = "HexField", BackgroundColor3 = Theme.tint,
         BackgroundTransparency = 0.35, BorderSizePixel = 0,
         Position = UDim2.fromOffset(38, 260), Size = UDim2.new(1, -38, 0, 38),
-        ZIndex = 4, Parent = fields})
+        ZIndex = 4, Parent = content})
     corner(hexHolder, UDim.new(0.5, 0)); specularRim(hexHolder, 1, 0.5)
     create("TextLabel", {BackgroundTransparency = 1, Position = UDim2.fromOffset(12, 0),
         Size = UDim2.fromOffset(12, 38), FontFace = font(Enum.FontWeight.SemiBold),
