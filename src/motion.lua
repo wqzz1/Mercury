@@ -539,15 +539,17 @@ local material=(function()
  -- sprite (the exact maths of that ring stack), shown in the real panel in place
  -- of its rings and used by the liquid too, so every surface shows the same glow.
  local orbSprites={}
- local function orbPixels(orb,size,D)
+ local function orbPixels(orb,size,D,yield)
   local c=size/2;local n=orb.rings;local keep=1-orb.alpha
   local rgb=byte(orb.color.R)+byte(orb.color.G)*256+byte(orb.color.B)*65536
-  local buf=buffer.create(size*size*4)
+  local buf=buffer.create(size*size*4);local slice=os.clock()
   for y=0,size-1 do for x=0,size-1 do
    -- rings at scale 1-(j-1)/n*.92 cover this pixel: a count linear in radius
    local d=sqrt((x+.5-c)^2+(y+.5-c)^2);local count=clamp((1-2*d/D)*n/.92+.5,0,n)
    if count>0 then writeu32(buf,(y*size+x)*4,rgb+round((1-keep^(count/n))*255)*16777216) end
-  end end
+  end
+   if yield and os.clock()-slice>.002 then task.wait();slice=os.clock() end
+  end
   return buf
  end
  do
@@ -862,12 +864,14 @@ local material=(function()
 
  -- Per-size static layers: base gradient (with the extension margin fading to
  -- ink), gloss/vignette, orb sprites and pre-scaled tinted lava tiles.
- local function build(Wp,Hp,yield)
+ local function build(Wp,Hp,yield,resolve)
   local k=Wp/max(1,root.Size.X.Offset)
   local BW,BH=ceil(Wp)+2*MARGIN,ceil(Hp)+2*MARGIN
   local baseBuf,topBuf=buffer.create(BW*BH*4),buffer.create(BW*BH*4)
   local lr,lg,lb={},{},{}
-  for i=0,1023 do local c=baseGradient and seqColor(baseGradient.Color,i/1023) or Theme.tint;lr[i],lg[i],lb[i]=byte(c.R),byte(c.G),byte(c.B) end
+  local baseSeq=baseGradient and baseGradient.Color
+  if resolve and baseSeq then local keys={};for i,p in ipairs(baseSeq.Keypoints) do keys[i]=ColorSequenceKeypoint.new(p.Time,resolve(p.Value)) end;baseSeq=ColorSequence.new(keys) end
+  for i=0,1023 do local c=baseSeq and seqColor(baseSeq,i/1023) or Theme.tint;lr[i],lg[i],lb[i]=byte(c.R),byte(c.G),byte(c.B) end
   local angle=math.rad(baseGradient and baseGradient.Rotation or 0);local cb,sb=cos(angle),sin(angle)
   local ink=Theme.ink or INK;local ir,ig,ib=byte(ink.R),byte(ink.G),byte(ink.B)
   local slice=os.clock()
@@ -918,7 +922,7 @@ local material=(function()
     for _,sub in ipairs(subs) do
      -- sub-pixel 0 of the tile is texel tile/2, keeping bilinear taps inside the 2x2 texture
      sub.image:DrawImageTransformed(Vector2.new(tile/2*s-sub.x,tile/2*s-sub.y),Vector2.new(s,s),0,texture,{CombineType=WRITE})
-     sub.image:DrawRectangle(Vector2.zero,Vector2.new(sub.w,sub.h),label.ImageColor3,label.ImageTransparency,MUL)
+     sub.image:DrawRectangle(Vector2.zero,Vector2.new(sub.w,sub.h),resolve and resolve(label.ImageColor3) or label.ImageColor3,label.ImageTransparency,MUL)
     end
     result.lava[#result.lava+1]={label=label,scale=Wp/max(1e-3,label.ImageRectSize.X),period=period,anchor=tile/2,subs=subs}
     if yield then task.wait() end
@@ -937,26 +941,33 @@ local material=(function()
  local function matches(set,size) return set~=nil and set.textured==(texture~=nil) and math.abs(set.w-size.X)<.5 and math.abs(set.h-size.Y)<.5 end
  -- A theme change recolours the backdrop instances; read their colours again,
  -- re-bake the orb glows in place and rebuild the per-size layers.
- function m.recolor()
+ -- resolve(colour) -> colour maps the window's current colours to the target
+ -- palette (nil: read the live colours); onDone runs once the new marble is live.
+ function m.recolor(resolve,onDone)
   m.recolorToken=(m.recolorToken or 0)+1
   local token=m.recolorToken
+  local function res(c) if resolve then return resolve(c) end;return c end
   task.spawn(function()
    for i,orb in ipairs(orbData) do
     local ring=orb.frame:FindFirstChildWhichIsA('Frame')
-    if ring then orb.color=ring.BackgroundColor3 end
+    if ring then orb.color=res(ring.BackgroundColor3) end
     local sprite=orbSprites[i]
-    if sprite then sprite.image:WritePixelsBuffer(Vector2.zero,Vector2.new(sprite.size,sprite.size),orbPixels(orb,sprite.size,sprite.D)) end
-    task.wait();if token~=m.recolorToken then return end
+    if sprite then
+     local buf=orbPixels(orb,sprite.size,sprite.D,true)
+     if token~=m.recolorToken then return end
+     sprite.image:WritePixelsBuffer(Vector2.zero,Vector2.new(sprite.size,sprite.size),buf)
+    end
    end
-   for _,vein in ipairs(veinData) do local c=vein.frame.BackgroundColor3;vein.rgb=byte(c.R)+byte(c.G)*256+byte(c.B)*65536 end
-   for _,layer in ipairs(topLayers) do layer.color=layer.instance.BackgroundColor3 end
+   for _,vein in ipairs(veinData) do local c=res(vein.frame.BackgroundColor3);vein.rgb=byte(c.R)+byte(c.G)*256+byte(c.B)*65536 end
+   for _,layer in ipairs(topLayers) do layer.color=res(layer.instance.BackgroundColor3) end
    local size=panelSize()
-   local ok,new=pcall(build,size.X,size.Y,true)
+   local ok,new=pcall(build,size.X,size.Y,true,resolve)
    if not ok then return end
    if token~=m.recolorToken then release(new);return end
    local old=assets;assets=new
    if old then task.delay(1,release,old) end
    m.invalidateSheet()
+   if onDone then onDone() end
   end)
  end
  Resize.recolorMaterial=m.recolor
@@ -3456,7 +3467,7 @@ ch:Fire('ready')
   local cardScale,usePos=0,true
   if m.opening then
    if m.hold then
-    if now-(m.drawn or 0)<.05 then return end
+    if now-(m.drawn or 0)<.012 then return end
     m.drawn=now;cardScale,usePos=1,false
    else
     local total=Layout.transitionTime or 1.05
@@ -3472,7 +3483,7 @@ ch:Fire('ready')
    end
   else
    if now<m.start then
-    if now-(m.drawn or 0)<.05 then return end
+    if now-(m.drawn or 0)<.012 then return end
     m.drawn=now;cardScale,usePos=1,false
    else
     if not m.started then m.started=now;simState.got=false;simChannel:Fire('simClose',g) end

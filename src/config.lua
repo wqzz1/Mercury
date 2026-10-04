@@ -60,7 +60,24 @@ local function finishPalette(palette: {[string]: Color3}): {[string]: Color3}
     for _, role in ThemeRoles do
         local c = palette[role.key]
         local r, g, b = math.round(c.R * 255), math.round(c.G * 255), math.round(c.B * 255)
-        while used[r * 65536 + g * 256 + b] do b = if b > 0 then b - 1 else b + 1 end
+        -- nudge a duplicate by the smallest free step (blue, then green, then red)
+        if used[r * 65536 + g * 256 + b] then
+            local found = false
+            for step = 1, 255 do
+                for _, d in {-step, step} do
+                    for channel = 3, 1, -1 do
+                        local rr, gg, bb = r, g, b
+                        if channel == 3 then bb = b + d elseif channel == 2 then gg = g + d else rr = r + d end
+                        if rr >= 0 and rr <= 255 and gg >= 0 and gg <= 255 and bb >= 0 and bb <= 255 and not used[rr * 65536 + gg * 256 + bb] then
+                            r, g, b, found = rr, gg, bb, true
+                            break
+                        end
+                    end
+                    if found then break end
+                end
+                if found then break end
+            end
+        end
         used[r * 65536 + g * 256 + b] = true
         palette[role.key] = Color3.fromRGB(r, g, b)
     end

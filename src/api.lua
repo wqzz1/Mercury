@@ -375,17 +375,17 @@ local function addColorPicker(container, config)
                 -- specular crescent that follows the curve of the glass: inside the
                 -- bead's edge, outside the same circle shifted toward the bottom right,
                 -- brightest at the top left and thinning out around the arc
-                local inner = math.sqrt((u - 0.13) ^ 2 + (v - 0.17) ^ 2)
-                local band = smoothstep(0.9, 0.86, r) * smoothstep(0.84, 0.92, inner)
+                local inner = math.sqrt((u - 0.09) ^ 2 + (v - 0.12) ^ 2)
+                local band = smoothstep(0.9, 0.87, r) * smoothstep(0.86, 0.91, inner)
                 local angle = math.atan2(v, u)
-                band *= smoothstep(0.05, 0.85, math.cos(angle - math.rad(-128)))
-                local highlight = 0.85 * band
+                band *= smoothstep(0.4, 0.92, math.cos(angle - math.rad(-128)))
+                local highlight = 0.8 * band
                 -- a small specular point on the crescent
-                local point = math.sqrt((u + 0.42) ^ 2 + (v + 0.5) ^ 2)
-                highlight = math.max(highlight, 0.55 * (1 - smoothstep(0, 0.13, point)))
+                local point = math.sqrt((u + 0.45) ^ 2 + (v + 0.52) ^ 2)
+                highlight = math.max(highlight, 0.45 * (1 - smoothstep(0, 0.09, point)))
                 -- light bending back out through the bottom right
-                local caustic = 0.3 * smoothstep(0.7, 0.93, r) * (1 - smoothstep(0.93, 1, r))
-                    * smoothstep(0.3, 0.9, math.cos(angle - math.rad(52)))
+                local caustic = 0.25 * smoothstep(0.74, 0.93, r) * (1 - smoothstep(0.93, 1, r))
+                    * smoothstep(0.45, 0.92, math.cos(angle - math.rad(52)))
                 local white = math.max(highlight, caustic)
                 local a = white + depth * (1 - white)
                 return (a > 0 and white / a or 0), a * cover
@@ -1003,23 +1003,47 @@ local themeHistory = {} -- recent rainbow palettes, so leaving Rainbow finds eve
 function window:SetTheme(theme)
     rainbowToken += 1
     if theme == "Rainbow" then
-        -- the hue drifts through every colour (a full turn in ~25 s); bindings are
-        -- rescanned every 2 s against recent palettes, the marble every 2.5 s
+        -- The hue drifts through every colour (a full turn in ~25 s). The window's
+        -- frames follow it every tick; the marble the liquid draws is rebuilt back
+        -- to back in the background for the hue it was started with. While the
+        -- liquid shows (minimizing, minimized) the frames hold the marble's hue,
+        -- so the two always match.
         local token = rainbowToken
         self.Theme = "Rainbow"
         task.spawn(function()
             local hue = (Theme.violet:ToHSV())
             local history = themeHistory
             table.clear(history); table.insert(history, table.clone(Theme))
-            local bindings, scanned, rebuilt = nil, 0, os.clock()
+            local bindings, scanned = nil, 0
+            local building, built, held = false, nil, nil
+            local function rainbowPalette(h) return tintPalette({hue = h, sat = RainbowTint.sat, value = RainbowTint.value}) end
+            local function startBuild(h)
+                if building or not Resize.recolorMaterial then return end
+                building = true
+                local palette, known = rainbowPalette(h), knownColors(history)
+                local ok = pcall(Resize.recolorMaterial, function(c)
+                    local key = known[colorKey(c)]
+                    return if key then palette[key] else c
+                end, function()
+                    building = false
+                    built = palette
+                end)
+                if not ok then building = false end
+            end
             while token == rainbowToken and not state.destroyed do
                 local now = os.clock()
                 if not bindings or now - scanned > 2 then bindings = scanThemed(knownColors(history)); scanned = now end
-                local palette = tintPalette({hue = hue, sat = RainbowTint.sat, value = RainbowTint.value})
-                applyPalette(palette, bindings)
-                table.insert(history, palette)
-                if #history > 40 then table.remove(history, 1) end
-                if now - rebuilt > 2.5 and Resize.recolorMaterial then rebuilt = now; pcall(Resize.recolorMaterial) end
+                local liquidShowing = Resize.animating or Resize.minimized
+                if liquidShowing and built then
+                    if held ~= built then held = built; applyPalette(built, bindings); table.insert(history, built) end
+                else
+                    held = nil
+                    local palette = rainbowPalette(hue)
+                    applyPalette(palette, bindings)
+                    table.insert(history, palette)
+                    if #history > 60 then table.remove(history, 1) end
+                end
+                startBuild(hue)
                 hue = (hue + 0.004) % 1
                 task.wait(0.1)
             end

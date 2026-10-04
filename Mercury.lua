@@ -89,7 +89,24 @@ local function finishPalette(palette: {[string]: Color3}): {[string]: Color3}
     for _, role in ThemeRoles do
         local c = palette[role.key]
         local r, g, b = math.round(c.R * 255), math.round(c.G * 255), math.round(c.B * 255)
-        while used[r * 65536 + g * 256 + b] do b = if b > 0 then b - 1 else b + 1 end
+        -- nudge a duplicate by the smallest free step (blue, then green, then red)
+        if used[r * 65536 + g * 256 + b] then
+            local found = false
+            for step = 1, 255 do
+                for _, d in {-step, step} do
+                    for channel = 3, 1, -1 do
+                        local rr, gg, bb = r, g, b
+                        if channel == 3 then bb = b + d elseif channel == 2 then gg = g + d else rr = r + d end
+                        if rr >= 0 and rr <= 255 and gg >= 0 and gg <= 255 and bb >= 0 and bb <= 255 and not used[rr * 65536 + gg * 256 + bb] then
+                            r, g, b, found = rr, gg, bb, true
+                            break
+                        end
+                    end
+                    if found then break end
+                end
+                if found then break end
+            end
+        end
         used[r * 65536 + g * 256 + b] = true
         palette[role.key] = Color3.fromRGB(r, g, b)
     end
@@ -2516,15 +2533,17 @@ local material=(function()
  -- sprite (the exact maths of that ring stack), shown in the real panel in place
  -- of its rings and used by the liquid too, so every surface shows the same glow.
  local orbSprites={}
- local function orbPixels(orb,size,D)
+ local function orbPixels(orb,size,D,yield)
   local c=size/2;local n=orb.rings;local keep=1-orb.alpha
   local rgb=byte(orb.color.R)+byte(orb.color.G)*256+byte(orb.color.B)*65536
-  local buf=buffer.create(size*size*4)
+  local buf=buffer.create(size*size*4);local slice=os.clock()
   for y=0,size-1 do for x=0,size-1 do
    -- rings at scale 1-(j-1)/n*.92 cover this pixel: a count linear in radius
    local d=sqrt((x+.5-c)^2+(y+.5-c)^2);local count=clamp((1-2*d/D)*n/.92+.5,0,n)
    if count>0 then writeu32(buf,(y*size+x)*4,rgb+round((1-keep^(count/n))*255)*16777216) end
-  end end
+  end
+   if yield and os.clock()-slice>.002 then task.wait();slice=os.clock() end
+  end
   return buf
  end
  do
@@ -2839,12 +2858,14 @@ local material=(function()
 
  -- Per-size static layers: base gradient (with the extension margin fading to
  -- ink), gloss/vignette, orb sprites and pre-scaled tinted lava tiles.
- local function build(Wp,Hp,yield)
+ local function build(Wp,Hp,yield,resolve)
   local k=Wp/max(1,root.Size.X.Offset)
   local BW,BH=ceil(Wp)+2*MARGIN,ceil(Hp)+2*MARGIN
   local baseBuf,topBuf=buffer.create(BW*BH*4),buffer.create(BW*BH*4)
   local lr,lg,lb={},{},{}
-  for i=0,1023 do local c=baseGradient and seqColor(baseGradient.Color,i/1023) or Theme.tint;lr[i],lg[i],lb[i]=byte(c.R),byte(c.G),byte(c.B) end
+  local baseSeq=baseGradient and baseGradient.Color
+  if resolve and baseSeq then local keys={};for i,p in ipairs(baseSeq.Keypoints) do keys[i]=ColorSequenceKeypoint.new(p.Time,resolve(p.Value)) end;baseSeq=ColorSequence.new(keys) end
+  for i=0,1023 do local c=baseSeq and seqColor(baseSeq,i/1023) or Theme.tint;lr[i],lg[i],lb[i]=byte(c.R),byte(c.G),byte(c.B) end
   local angle=math.rad(baseGradient and baseGradient.Rotation or 0);local cb,sb=cos(angle),sin(angle)
   local ink=Theme.ink or INK;local ir,ig,ib=byte(ink.R),byte(ink.G),byte(ink.B)
   local slice=os.clock()
@@ -2895,7 +2916,7 @@ local material=(function()
     for _,sub in ipairs(subs) do
      -- sub-pixel 0 of the tile is texel tile/2, keeping bilinear taps inside the 2x2 texture
      sub.image:DrawImageTransformed(Vector2.new(tile/2*s-sub.x,tile/2*s-sub.y),Vector2.new(s,s),0,texture,{CombineType=WRITE})
-     sub.image:DrawRectangle(Vector2.zero,Vector2.new(sub.w,sub.h),label.ImageColor3,label.ImageTransparency,MUL)
+     sub.image:DrawRectangle(Vector2.zero,Vector2.new(sub.w,sub.h),resolve and resolve(label.ImageColor3) or label.ImageColor3,label.ImageTransparency,MUL)
     end
     result.lava[#result.lava+1]={label=label,scale=Wp/max(1e-3,label.ImageRectSize.X),period=period,anchor=tile/2,subs=subs}
     if yield then task.wait() end
@@ -2914,26 +2935,33 @@ local material=(function()
  local function matches(set,size) return set~=nil and set.textured==(texture~=nil) and math.abs(set.w-size.X)<.5 and math.abs(set.h-size.Y)<.5 end
  -- A theme change recolours the backdrop instances; read their colours again,
  -- re-bake the orb glows in place and rebuild the per-size layers.
- function m.recolor()
+ -- resolve(colour) -> colour maps the window's current colours to the target
+ -- palette (nil: read the live colours); onDone runs once the new marble is live.
+ function m.recolor(resolve,onDone)
   m.recolorToken=(m.recolorToken or 0)+1
   local token=m.recolorToken
+  local function res(c) if resolve then return resolve(c) end;return c end
   task.spawn(function()
    for i,orb in ipairs(orbData) do
     local ring=orb.frame:FindFirstChildWhichIsA('Frame')
-    if ring then orb.color=ring.BackgroundColor3 end
+    if ring then orb.color=res(ring.BackgroundColor3) end
     local sprite=orbSprites[i]
-    if sprite then sprite.image:WritePixelsBuffer(Vector2.zero,Vector2.new(sprite.size,sprite.size),orbPixels(orb,sprite.size,sprite.D)) end
-    task.wait();if token~=m.recolorToken then return end
+    if sprite then
+     local buf=orbPixels(orb,sprite.size,sprite.D,true)
+     if token~=m.recolorToken then return end
+     sprite.image:WritePixelsBuffer(Vector2.zero,Vector2.new(sprite.size,sprite.size),buf)
+    end
    end
-   for _,vein in ipairs(veinData) do local c=vein.frame.BackgroundColor3;vein.rgb=byte(c.R)+byte(c.G)*256+byte(c.B)*65536 end
-   for _,layer in ipairs(topLayers) do layer.color=layer.instance.BackgroundColor3 end
+   for _,vein in ipairs(veinData) do local c=res(vein.frame.BackgroundColor3);vein.rgb=byte(c.R)+byte(c.G)*256+byte(c.B)*65536 end
+   for _,layer in ipairs(topLayers) do layer.color=res(layer.instance.BackgroundColor3) end
    local size=panelSize()
-   local ok,new=pcall(build,size.X,size.Y,true)
+   local ok,new=pcall(build,size.X,size.Y,true,resolve)
    if not ok then return end
    if token~=m.recolorToken then release(new);return end
    local old=assets;assets=new
    if old then task.delay(1,release,old) end
    m.invalidateSheet()
+   if onDone then onDone() end
   end)
  end
  Resize.recolorMaterial=m.recolor
@@ -5433,7 +5461,7 @@ ch:Fire('ready')
   local cardScale,usePos=0,true
   if m.opening then
    if m.hold then
-    if now-(m.drawn or 0)<.05 then return end
+    if now-(m.drawn or 0)<.012 then return end
     m.drawn=now;cardScale,usePos=1,false
    else
     local total=Layout.transitionTime or 1.05
@@ -5449,7 +5477,7 @@ ch:Fire('ready')
    end
   else
    if now<m.start then
-    if now-(m.drawn or 0)<.05 then return end
+    if now-(m.drawn or 0)<.012 then return end
     m.drawn=now;cardScale,usePos=1,false
    else
     if not m.started then m.started=now;simState.got=false;simChannel:Fire('simClose',g) end
@@ -6426,17 +6454,17 @@ local function addColorPicker(container, config)
                 -- specular crescent that follows the curve of the glass: inside the
                 -- bead's edge, outside the same circle shifted toward the bottom right,
                 -- brightest at the top left and thinning out around the arc
-                local inner = math.sqrt((u - 0.13) ^ 2 + (v - 0.17) ^ 2)
-                local band = smoothstep(0.9, 0.86, r) * smoothstep(0.84, 0.92, inner)
+                local inner = math.sqrt((u - 0.09) ^ 2 + (v - 0.12) ^ 2)
+                local band = smoothstep(0.9, 0.87, r) * smoothstep(0.86, 0.91, inner)
                 local angle = math.atan2(v, u)
-                band *= smoothstep(0.05, 0.85, math.cos(angle - math.rad(-128)))
-                local highlight = 0.85 * band
+                band *= smoothstep(0.4, 0.92, math.cos(angle - math.rad(-128)))
+                local highlight = 0.8 * band
                 -- a small specular point on the crescent
-                local point = math.sqrt((u + 0.42) ^ 2 + (v + 0.5) ^ 2)
-                highlight = math.max(highlight, 0.55 * (1 - smoothstep(0, 0.13, point)))
+                local point = math.sqrt((u + 0.45) ^ 2 + (v + 0.52) ^ 2)
+                highlight = math.max(highlight, 0.45 * (1 - smoothstep(0, 0.09, point)))
                 -- light bending back out through the bottom right
-                local caustic = 0.3 * smoothstep(0.7, 0.93, r) * (1 - smoothstep(0.93, 1, r))
-                    * smoothstep(0.3, 0.9, math.cos(angle - math.rad(52)))
+                local caustic = 0.25 * smoothstep(0.74, 0.93, r) * (1 - smoothstep(0.93, 1, r))
+                    * smoothstep(0.45, 0.92, math.cos(angle - math.rad(52)))
                 local white = math.max(highlight, caustic)
                 local a = white + depth * (1 - white)
                 return (a > 0 and white / a or 0), a * cover
@@ -7054,23 +7082,47 @@ local themeHistory = {} -- recent rainbow palettes, so leaving Rainbow finds eve
 function window:SetTheme(theme)
     rainbowToken += 1
     if theme == "Rainbow" then
-        -- the hue drifts through every colour (a full turn in ~25 s); bindings are
-        -- rescanned every 2 s against recent palettes, the marble every 2.5 s
+        -- The hue drifts through every colour (a full turn in ~25 s). The window's
+        -- frames follow it every tick; the marble the liquid draws is rebuilt back
+        -- to back in the background for the hue it was started with. While the
+        -- liquid shows (minimizing, minimized) the frames hold the marble's hue,
+        -- so the two always match.
         local token = rainbowToken
         self.Theme = "Rainbow"
         task.spawn(function()
             local hue = (Theme.violet:ToHSV())
             local history = themeHistory
             table.clear(history); table.insert(history, table.clone(Theme))
-            local bindings, scanned, rebuilt = nil, 0, os.clock()
+            local bindings, scanned = nil, 0
+            local building, built, held = false, nil, nil
+            local function rainbowPalette(h) return tintPalette({hue = h, sat = RainbowTint.sat, value = RainbowTint.value}) end
+            local function startBuild(h)
+                if building or not Resize.recolorMaterial then return end
+                building = true
+                local palette, known = rainbowPalette(h), knownColors(history)
+                local ok = pcall(Resize.recolorMaterial, function(c)
+                    local key = known[colorKey(c)]
+                    return if key then palette[key] else c
+                end, function()
+                    building = false
+                    built = palette
+                end)
+                if not ok then building = false end
+            end
             while token == rainbowToken and not state.destroyed do
                 local now = os.clock()
                 if not bindings or now - scanned > 2 then bindings = scanThemed(knownColors(history)); scanned = now end
-                local palette = tintPalette({hue = hue, sat = RainbowTint.sat, value = RainbowTint.value})
-                applyPalette(palette, bindings)
-                table.insert(history, palette)
-                if #history > 40 then table.remove(history, 1) end
-                if now - rebuilt > 2.5 and Resize.recolorMaterial then rebuilt = now; pcall(Resize.recolorMaterial) end
+                local liquidShowing = Resize.animating or Resize.minimized
+                if liquidShowing and built then
+                    if held ~= built then held = built; applyPalette(built, bindings); table.insert(history, built) end
+                else
+                    held = nil
+                    local palette = rainbowPalette(hue)
+                    applyPalette(palette, bindings)
+                    table.insert(history, palette)
+                    if #history > 60 then table.remove(history, 1) end
+                end
+                startBuild(hue)
                 hue = (hue + 0.004) % 1
                 task.wait(0.1)
             end
