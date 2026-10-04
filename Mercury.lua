@@ -4869,7 +4869,7 @@ do
  local WW,WH=296,148
  local surface,label=nil,nil
  local m=nil
- local BUD,FILL,RETRACT,WOBBLE=.22,.44,.14,.34
+ local BUD,FILL,RETRACT,WOBBLE=.22,.62,.14,.4
  local SNAP=BUD+FILL*.8
  local function ensure()
   if surface then return end
@@ -4903,36 +4903,89 @@ do
    end
   end
  end
+ -- s = distance outward from the panel edge, mapped to X by side (dir)
  local function draw(tau,opening,w,h,r)
   local dir=m.onRight and 1 or -1
   local cw,ch=TOAST_SIZE.X*k,TOAST_SIZE.Y*k
   local gap=Layout.gap*k
   local ex=m.onRight and w or 0
   local ey=h-ch/2
-  local cx1=ex+dir*(gap+cw/2)
+  local function X(s) return ex+dir*s end
   local ox=m.onRight and floor((ex-52)/S)*S or floor((ex-gap-cw-44)/S)*S
   local oy=floor((ey-WH/2)/S)*S
+  local rad=18*k
   local circles,poly={},nil
   if tau<BUD then
+   -- bud: a bead pushes out of the panel edge toward where the card will be
    local u=tau/BUD;local e=1-(1-u)^3
-   local br=4+12*e
-   circles[1]={ex+dir*(-4+br*.9*e+6*e)-ox,ey-oy,br}
+   local br=4+10*e
+   circles[1]={X(-4+(gap+6)*e)-ox,ey-oy,br}
   else
    local u=min(1,(tau-BUD)/FILL)
-   local e=u<.5 and 4*u*u*u or 1-(-2*u+2)^3/2
-   local bx=ex+dir*16.8
-   local ccx=bx+(cx1-bx)*e
-   local ww,hh=32+(cw-32)*e,32+(ch-32)*e
-   if opening and tau>BUD+FILL then local t2=tau-BUD-FILL;local s=.07*math.exp(-7*t2)*sin(24*t2);ww*=1+s;hh*=1-s*.6 end
-   poly={};rrect(ccx-ox,ey-oy,ww,hh,18*k,poly)
-   local inner=ccx-dir*ww/2
-   local ein=ex-dir*4
+   if u<1 or not opening then
+    -- pour: liquid enters through the neck at mid-height and floods the card.
+    -- Its front is a moving wave (two travelling sines with per-notification
+    -- phases), runs ahead in the middle where the stream comes in, and the
+    -- liquid only reaches the top and bottom edges as it spreads.
+    local e=1-(1-u)^2.2
+    local reach=(cw+26*k)*e
+    local spread=.42+.58*(1-(1-min(1,u*1.5))^2)
+    local amp=9*k*sin(pi*min(1,u*1.05))
+    local ph=m.ph
+    local function front(yn)
+     local f=reach*(1-.32*yn*yn*(1-u))
+     f+=amp*(sin(2.3*pi*yn+ph[1]+tau*7.5)+.55*sin(4.1*pi*yn+ph[2]-tau*11))
+     local edge=clamp((spread-math.abs(yn))/.18,0,1)
+     return f*math.sqrt(edge)
+    end
+    local inner,outer=gap,gap+cw
+    local right,left={},{}
+    local N=28
+    for i=0,N do
+     local yn=-1+2*i/N
+     local y=ey+yn*ch/2
+     -- the card's own rounded outline on this row
+     local dyc=max(0,math.abs(y-ey)-(ch/2-rad))
+     local inset=rad-sqrt(max(0,rad*rad-dyc*dyc))
+     local a=inner+inset;local bmax=outer-inset
+     local f=front(yn)
+     local bb=min(bmax,a+f)
+     if bb>a+.5 then right[#right+1]={X(bb)-ox,y-oy};left[#left+1]={X(a)-ox,y-oy} end
+    end
+    if #right>=2 then
+     poly={}
+     for _,pt in ipairs(right) do poly[#poly+1]=pt end
+     for i=#left,1,-1 do poly[#poly+1]=left[i] end
+    end
+    -- splash beads riding just ahead of the wave, absorbed as it catches up
+    if u>.15 and u<.8 then
+     for j,sp in ipairs(m.splash) do
+      local yn=sp[1];local life=clamp((u-sp[2])/.25,0,1)
+      if life>0 and life<1 then
+       local s=gap+min(cw-6,front(yn)+(6+4*sp[3])*k*sin(pi*life))
+       circles[#circles+1]={X(s)-ox,ey+yn*ch/2*.8-oy,(2.5+1.5*sp[3])*k*sin(pi*life)}
+      end
+     end
+    end
+    -- the bud bead melts into the incoming liquid
+    local fade=1-clamp(u/.3,0,1)
+    if fade>0 then circles[#circles+1]={X(gap+6)-ox,ey-oy,14*fade} end
+   else
+    -- full: the card rings like a filled water balloon, then settles
+    local t2=tau-BUD-FILL
+    local s=.09*math.exp(-6*t2)*sin(22*t2)
+    local ww,hh=cw*(1+s),ch*(1-s*.7)
+    poly={};rrect(X(gap+cw/2)-ox,ey-oy,ww,hh,rad,poly)
+   end
+   -- neck between the panel edge and the card
+   local ein=-4
+   local cin=gap+4
    if tau<SNAP then
     local ns=clamp((tau-BUD)/(SNAP-BUD),0,1);local nr=9-5*ns
-    for _,f in ipairs({.25,.5,.75}) do circles[#circles+1]={ein+(inner+dir*4-ein)*f-ox,ey-oy,nr*(1-.35*(1-math.abs(2*f-1)))} end
+    for _,f in ipairs({.25,.5,.75}) do circles[#circles+1]={X(ein+(cin-ein)*f)-ox,ey-oy,nr*(1-.35*(1-math.abs(2*f-1)))} end
    elseif tau<SNAP+RETRACT then
     local q=smooth((tau-SNAP)/RETRACT)
-    for _,f in ipairs({.25,.5,.75}) do circles[#circles+1]={ein+(inner+dir*4-ein)*f*(1-q)-ox,ey-oy,(4-1.75*(1-math.abs(2*f-1)))*(1-q)} end
+    for _,f in ipairs({.25,.5,.75}) do circles[#circles+1]={X(ein+(cin-ein)*f*(1-q))-ox,ey-oy,(4-1.75*(1-math.abs(2*f-1)))*(1-q)} end
    end
   end
   -- panel outline, then the card as a second loop; the doubled bridge between
@@ -4949,8 +5002,8 @@ do
  end
  local fadeToken=0
  toastMorph={
-  open=function(onRight,onDone) ensure();fadeToken+=1;label.ImageTransparency=0;m={opening=true,start=clock,onRight=onRight,onDone=onDone} end,
-  close=function(onRight,onDone) ensure();fadeToken+=1;label.ImageTransparency=0;m={opening=false,start=clock+.18,onRight=onRight,onDone=onDone} end,
+  open=function(onRight,onDone) ensure();fadeToken+=1;label.ImageTransparency=0;m={opening=true,start=clock,onRight=onRight,onDone=onDone,ph={rand(0,2*pi),rand(0,2*pi)},splash={{rand(-.6,-.1),rand(.15,.35),rand(0,1)},{rand(.1,.6),rand(.3,.5),rand(0,1)}}} end,
+  close=function(onRight,onDone) ensure();fadeToken+=1;label.ImageTransparency=0;local old=m;m={opening=false,start=clock+.18,onRight=onRight,onDone=onDone,ph=old and old.ph or {rand(0,2*pi),rand(0,2*pi)},splash={}} end,
  }
  jobs[#jobs+1]={name='toast',interval=0,elapsed=0,
   active=function() return m~=nil and root.Visible end,
