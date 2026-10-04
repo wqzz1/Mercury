@@ -683,6 +683,49 @@ local toastContent = create("TextLabel", {
     ZIndex = 11,
     Parent = toast,
 })
+-- Optional status badge on the right (Notify Type = "Success" / "Error"):
+-- a soft tinted disc with a Lucide check or x. Created before collectFade so it
+-- fades in and out with the text.
+local toastBadge = create("Frame", {
+    Name = "StatusBadge",
+    AnchorPoint = Vector2.new(1, 0.5),
+    Position = UDim2.new(1, -14, 0.5, 0),
+    Size = UDim2.fromOffset(26, 26),
+    BackgroundColor3 = Theme.mist,
+    BackgroundTransparency = 0.84,
+    BorderSizePixel = 0,
+    Visible = false,
+    ZIndex = 11,
+    Parent = toast,
+})
+corner(toastBadge, UDim.new(0.5, 0))
+local toastBadgeIcon = create("ImageLabel", {
+    Name = "Icon",
+    BackgroundTransparency = 1,
+    AnchorPoint = Vector2.new(0.5, 0.5),
+    Position = UDim2.fromScale(0.5, 0.5),
+    Size = UDim2.fromOffset(15, 15),
+    ZIndex = 12,
+    Parent = toastBadge,
+})
+local TOAST_STATUS = {
+    success = { icon = "check", color = Color3.fromRGB(150, 232, 190) },
+    error = { icon = "x", color = Theme.danger },
+}
+local function setToastStatus(kind: string?)
+    local status = if typeof(kind) == "string" then TOAST_STATUS[string.lower(kind)] else nil
+    local data = status and LUCIDE[status.icon]
+    toastBadge.Visible = data ~= nil
+    local textWidth = if data then -32 - 34 else -32
+    toastTitle.Size = UDim2.new(1, textWidth, 0, 18)
+    toastContent.Size = UDim2.new(1, textWidth, 0, 16)
+    if not data then return end
+    toastBadge.BackgroundColor3 = status.color
+    toastBadgeIcon.Image = "rbxassetid://" .. tostring(data[1])
+    toastBadgeIcon.ImageRectSize = Vector2.new(data[2], data[3])
+    toastBadgeIcon.ImageRectOffset = Vector2.new(data[4], data[5])
+    toastBadgeIcon.ImageColor3 = status.color
+end
 local toastFade = collectFade(toast)
 
 -- Panel resizing state (grip, limits, and skeleton bones that depend on height)

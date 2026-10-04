@@ -784,7 +784,8 @@ function window:GetAttribute(key) return self.Attributes[key] end
 function window:SelectTab(name) return selectTab(name) end
 function window:Notify(config)
     assert(typeof(config) == "table", "Notify needs an options table")
-    showToast(config.Title or "", config.Content or "", config.Duration)
+    -- optional status badge: Type = "Success" | "Error" (Flag is accepted as an alias)
+    showToast(config.Title or "", config.Content or "", config.Duration, config.Type or config.Flag)
 end
 function window:SetFooter(text) panel:FindFirstChild("Credit").Text = tostring(text) end
 function window:SetTitle(text) header:FindFirstChild("Title").Text = tostring(text) end
@@ -810,7 +811,7 @@ track(biolinkButton.MouseButton1Click:Connect(function()
         elseif opened then "Opening in browser"
         elseif copied then "Link copied"
         else "Copy not supported"
-    showToast(title, link:gsub("^https://", ""), 2.4)
+    showToast(title, (link:gsub("^https://", "")), 2.4, if copied or opened then "Success" else "Error")
 end))
 track(header.InputBegan:Connect(beginDrag))
 track(UserInputService.InputChanged:Connect(updateDrag))

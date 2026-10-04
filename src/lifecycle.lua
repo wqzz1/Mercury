@@ -4,14 +4,15 @@ local toastToken = 0
 local function setToastChrome(on: boolean)
     for _, child in toast:GetChildren() do
         if child:IsA("UIStroke") then child.Enabled = on
-        elseif child:IsA("GuiObject") and not child:IsA("TextLabel") then child.Visible = on end
+        elseif child:IsA("GuiObject") and not child:IsA("TextLabel") and child ~= toastBadge then child.Visible = on end
     end
 end
-local function showToast(title: string, content: string?, duration: number?)
+local function showToast(title: string, content: string?, duration: number?, kind: string?)
     toastToken += 1
     local token = toastToken
     toastTitle.Text = tostring(title or "")
     toastContent.Text = tostring(content or "")
+    setToastStatus(kind)
 
     local viewportSize = screenGui.AbsoluteSize
     local rightEdge = root.AbsolutePosition.X + root.AbsoluteSize.X + Layout.gap + TOAST_SIZE.X

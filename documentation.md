@@ -324,6 +324,10 @@ Icon names come from [Lucide](https://lucide.dev/icons/) and the bundled atlas m
 ```lua
 window:Notify({Title = "Saved", Content = "Your changes are ready", Duration = 3})
 
+-- optional status badge on the right: "Success" (check) or "Error" (x)
+window:Notify({Title = "Saved", Content = "Your changes are ready", Type = "Success"})
+window:Notify({Title = "Failed", Content = "Could not save", Type = "Error"})
+
 window:Minimize()
 window:Unminimize()
 window:SetTitle("New title")

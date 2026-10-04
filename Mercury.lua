@@ -1583,6 +1583,49 @@ local toastContent = create("TextLabel", {
     ZIndex = 11,
     Parent = toast,
 })
+-- Optional status badge on the right (Notify Type = "Success" / "Error"):
+-- a soft tinted disc with a Lucide check or x. Created before collectFade so it
+-- fades in and out with the text.
+local toastBadge = create("Frame", {
+    Name = "StatusBadge",
+    AnchorPoint = Vector2.new(1, 0.5),
+    Position = UDim2.new(1, -14, 0.5, 0),
+    Size = UDim2.fromOffset(26, 26),
+    BackgroundColor3 = Theme.mist,
+    BackgroundTransparency = 0.84,
+    BorderSizePixel = 0,
+    Visible = false,
+    ZIndex = 11,
+    Parent = toast,
+})
+corner(toastBadge, UDim.new(0.5, 0))
+local toastBadgeIcon = create("ImageLabel", {
+    Name = "Icon",
+    BackgroundTransparency = 1,
+    AnchorPoint = Vector2.new(0.5, 0.5),
+    Position = UDim2.fromScale(0.5, 0.5),
+    Size = UDim2.fromOffset(15, 15),
+    ZIndex = 12,
+    Parent = toastBadge,
+})
+local TOAST_STATUS = {
+    success = { icon = "check", color = Color3.fromRGB(150, 232, 190) },
+    error = { icon = "x", color = Theme.danger },
+}
+local function setToastStatus(kind: string?)
+    local status = if typeof(kind) == "string" then TOAST_STATUS[string.lower(kind)] else nil
+    local data = status and LUCIDE[status.icon]
+    toastBadge.Visible = data ~= nil
+    local textWidth = if data then -32 - 34 else -32
+    toastTitle.Size = UDim2.new(1, textWidth, 0, 18)
+    toastContent.Size = UDim2.new(1, textWidth, 0, 16)
+    if not data then return end
+    toastBadge.BackgroundColor3 = status.color
+    toastBadgeIcon.Image = "rbxassetid://" .. tostring(data[1])
+    toastBadgeIcon.ImageRectSize = Vector2.new(data[2], data[3])
+    toastBadgeIcon.ImageRectOffset = Vector2.new(data[4], data[5])
+    toastBadgeIcon.ImageColor3 = status.color
+end
 local toastFade = collectFade(toast)
 
 -- Panel resizing state (grip, limits, and skeleton bones that depend on height)
@@ -5203,14 +5246,15 @@ local toastToken = 0
 local function setToastChrome(on: boolean)
     for _, child in toast:GetChildren() do
         if child:IsA("UIStroke") then child.Enabled = on
-        elseif child:IsA("GuiObject") and not child:IsA("TextLabel") then child.Visible = on end
+        elseif child:IsA("GuiObject") and not child:IsA("TextLabel") and child ~= toastBadge then child.Visible = on end
     end
 end
-local function showToast(title: string, content: string?, duration: number?)
+local function showToast(title: string, content: string?, duration: number?, kind: string?)
     toastToken += 1
     local token = toastToken
     toastTitle.Text = tostring(title or "")
     toastContent.Text = tostring(content or "")
+    setToastStatus(kind)
 
     local viewportSize = screenGui.AbsoluteSize
     local rightEdge = root.AbsolutePosition.X + root.AbsoluteSize.X + Layout.gap + TOAST_SIZE.X
@@ -6114,7 +6158,8 @@ function window:GetAttribute(key) return self.Attributes[key] end
 function window:SelectTab(name) return selectTab(name) end
 function window:Notify(config)
     assert(typeof(config) == "table", "Notify needs an options table")
-    showToast(config.Title or "", config.Content or "", config.Duration)
+    -- optional status badge: Type = "Success" | "Error" (Flag is accepted as an alias)
+    showToast(config.Title or "", config.Content or "", config.Duration, config.Type or config.Flag)
 end
 function window:SetFooter(text) panel:FindFirstChild("Credit").Text = tostring(text) end
 function window:SetTitle(text) header:FindFirstChild("Title").Text = tostring(text) end
@@ -6140,7 +6185,7 @@ track(biolinkButton.MouseButton1Click:Connect(function()
         elseif opened then "Opening in browser"
         elseif copied then "Link copied"
         else "Copy not supported"
-    showToast(title, link:gsub("^https://", ""), 2.4)
+    showToast(title, (link:gsub("^https://", "")), 2.4, if copied or opened then "Success" else "Error")
 end))
 track(header.InputBegan:Connect(beginDrag))
 track(UserInputService.InputChanged:Connect(updateDrag))
