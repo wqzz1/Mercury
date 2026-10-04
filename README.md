@@ -1,4 +1,4 @@
-# alt="Mercury bubble" width="48" height="48"> Mercury
+# Mercury
 
 Mercury is a standalone Roblox Luau UI library with a liquid glass window, tabs, controls, notifications, and monochrome icons. It contains UI code only; your script supplies its own game features.
 
