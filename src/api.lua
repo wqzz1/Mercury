@@ -643,7 +643,7 @@ function window:CreateTab(name, icon)
         holder.AutomaticSize = Enum.AutomaticSize.Y
         -- Heading: TITLE ─────── with half a tapered divider after the title, thick
         -- and glowing next to the text and thinning out toward the right edge.
-        local HEAD_H, RULE_GAP, RULE_LENGTH, RULE_NUDGE = 24, 16, 170, 0
+        local HEAD_H, RULE_GAP, RULE_LENGTH, RULE_NUDGE = 24, 16, 170, 0.5
         -- title lines up with the row labels inside the glass rows, not the rows' edge
         local TITLE_X = Layout.padX + 20
         local heading = create("TextLabel", {Name = "Heading", BackgroundTransparency = 1,
