@@ -1526,7 +1526,7 @@ corner(toast, 18)
 local toastBase = create("Frame", {
     Name = "MarbleBase",
     BackgroundColor3 = Color3.new(1, 1, 1),
-    BackgroundTransparency = 0.04,
+    BackgroundTransparency = 0,
     BorderSizePixel = 0,
     Size = UDim2.fromScale(1, 1),
     ZIndex = 10,
@@ -1536,27 +1536,31 @@ corner(toastBase, 18)
 create("UIGradient", {
     Rotation = 125,
     Color = colorSeq({
-        {0, Color3.fromRGB(9, 7, 17)},
-        {0.4, Color3.fromRGB(27, 18, 44)},
-        {0.7, Color3.fromRGB(38, 22, 63)},
-        {1, Color3.fromRGB(11, 8, 21)},
+        {0, Color3.fromRGB(7, 7, 10)},
+        {0.4, Color3.fromRGB(22, 21, 27)},
+        {0.7, Color3.fromRGB(28, 20, 42)},
+        {1, Color3.fromRGB(7, 7, 10)},
     }),
     Parent = toastBase,
 })
 if lavaAsset then
-    local toastMarble = create("ImageLabel", {
-        Name = "MarbleLava",
-        BackgroundTransparency = 1,
-        Size = UDim2.fromScale(1, 1),
-        Image = lavaAsset,
-        ImageColor3 = Color3.fromRGB(150, 90, 240),
-        ImageTransparency = 0.38,
-        ImageRectOffset = Vector2.new(25, 20),
-        ImageRectSize = Vector2.new(105, 32),
-        ZIndex = 10,
-        Parent = toastBase,
-    })
-    corner(toastMarble, 18)
+    -- same texels-per-pixel as the window's lava, so the swirls are the same size
+    local texel = PANEL_HEIGHT / Lava.window
+    for index, layer in Lava.layers do
+        local toastMarble = create("ImageLabel", {
+            Name = "MarbleLava" .. index,
+            BackgroundTransparency = 1,
+            Size = UDim2.fromScale(1, 1),
+            Image = lavaAsset,
+            ImageColor3 = layer.color,
+            ImageTransparency = layer.transparency,
+            ImageRectOffset = layer.origin + Vector2.new(25, 20),
+            ImageRectSize = Vector2.new(TOAST_SIZE.X / texel, TOAST_SIZE.Y / texel),
+            ZIndex = 10,
+            Parent = toastBase,
+        })
+        corner(toastMarble, 18)
+    end
 end
 specularRim(toast, 1, 0.5)
 liquidWave(toast, TOAST_SIZE.X, TOAST_SIZE.Y, 18, 10)
@@ -3397,6 +3401,7 @@ end
 -- the same shader (rim mode writes only the light) and 9-slice it over the
 -- material. The old lens band and thin top rim are retired with it.
 local panelRim=nil
+local toastRim=nil
 -- px the liquid's edge (threshold contour) lies outside the outline it is drawn
 -- from; outlines are inset by this so the liquid edge sits exactly on the panel's.
 local contourOut=0
@@ -3450,9 +3455,9 @@ do
  end
  -- ESP card rim: the same liquid edge for the cards' corner radius, rendered
  -- now while the renderer is idle (cards are made later, at any time).
- if ok then
+ local function cardRim(cardRadius)
   -- tight around the corner: a 9-slice corner must fit inside the small card
-  local cardRadius,cardPad,cardMargin=14,4,4
+  local cardPad,cardMargin=4,4
   local eside=ceil(2*(cardRadius+cardPad+cardMargin)/(2*S))*2*S
   OW,OH=eside,eside;W,H=eside/S,eside/S
   mask=table.create(W*H,0);temp=table.create(W*H,0);zeros=table.create(W*H,0);ones=table.create(W,1);pixels=buffer.create(OW*OH*4);tiles={}
@@ -3489,9 +3494,10 @@ do
      buffer.writeu8(pixels,at,floor(buffer.readu8(pixels,at)*cover+.5))
     end
    end end
-   if image then image:WritePixelsBuffer(Vector2.zero,Vector2.new(eside,eside),pixels);api.espRim={image=image,side=eside,margin=cardMargin,radius=measured} end
+   if image then image:WritePixelsBuffer(Vector2.zero,Vector2.new(eside,eside),pixels);return {image=image,side=eside,margin=cardMargin,radius=measured} end
   end
  end
+ if ok then api.espRim=cardRim(14);toastRim=cardRim(18) end
  W,H,OW,OH,mask,temp,zeros,ones,pixels,tiles,P,cx,cy=table.unpack(saved,1,13)
  local backdropCorner=backdrop:FindFirstChildWhichIsA('UICorner')
  if contourRadius and backdropCorner then
@@ -3504,6 +3510,21 @@ do
   local rimLabel=backdrop:FindFirstChild('LiquidRim')
   if rimLabel then rimLabel.Position+=UDim2.fromOffset(-inset/k,-inset/k);rimLabel.Size+=UDim2.fromOffset(2*inset/k,2*inset/k) end
  end
+end
+-- The plain notification card (no parallel workers) wears the same liquid rim
+-- as the window, 9-sliced at the card's own radius, and fades with the card.
+-- setToastChrome hides it while the liquid morph draws its own card.
+if toastRim and toast then
+ local s,mg=toastRim.side,toastRim.margin
+ local k=Layout.uiScale
+ local rimLabel=create('ImageLabel',{Name='LiquidRim',BackgroundTransparency=1,ImageContent=Content.fromObject(toastRim.image),ScaleType=Enum.ScaleType.Slice,SliceCenter=Rect.new(s/2-1,s/2-1,s/2+1,s/2+1),SliceScale=1/k,Position=UDim2.fromOffset(-mg/k,-mg/k),Size=UDim2.new(1,2*mg/k,1,2*mg/k),ZIndex=10,Parent=toast})
+ passThrough(rimLabel)
+ table.insert(toastFade,{instance=rimLabel,property='ImageTransparency',base=0})
+ for _,child in ipairs(toast:GetChildren()) do if child:IsA('UIStroke') then child:Destroy() end end
+ local radius=UDim.new(0,math.max(0,toastRim.radius-1)/k)
+ for _,item in ipairs(toast:GetDescendants()) do if item:IsA('UICorner') and item.Parent and item.Parent.Name~='StatusBadge' and item.Parent.Name~='Glint' then item.CornerRadius=radius end end
+ local base=toast:FindFirstChild('MarbleBase')
+ if base then base.Position=UDim2.fromOffset(1/k,1/k);base.Size=UDim2.new(1,-2/k,1,-2/k) end
 end
 local function releaseImages()
  for _,surface in ipairs(surfaces) do for _,tile in ipairs(surface.tiles) do tile.label:Destroy();tile.image:Destroy();tile.underLabel:Destroy();tile.under:Destroy() end;material.unbind(surface);if surface.holder then surface.holder:Destroy() end end
@@ -5055,7 +5076,7 @@ ch.Event:Connect(function(tag,fid,ox,oy,w,h,r,dir,ex,g,cardScale,pos,n,mat)
   end
  end
  if pos and n>0 then
-  local R=4.5;local R2=R*R
+  local R=5.5;local R2=R*R
   for p=0,n-1 do
    local X=ex+dir*readf32(pos,p*8);local Y=readf32(pos,p*8+4)
    local cx,cy=(X-ox)/2,(Y-oy)/2
@@ -5063,15 +5084,17 @@ ch.Event:Connect(function(tag,fid,ox,oy,w,h,r,dir,ex,g,cardScale,pos,n,mat)
    local j0,j1=max(0,floor(cy-R)),min(FH-1,math.ceil(cy+R))
    for j=j0,j1 do local dy=j-cy;local row=j*FW
     for i=i0,i1 do local dx=i-cx;local d2=dx*dx+dy*dy
-     if d2<R2 then local k=1-d2/R2;field[row+i+1]+=k*k*.62 end end end
+     if d2<R2 then local k=1-d2/R2;field[row+i+1]+=k*k*.55 end end end
   end
-  -- one 1-2-1 smoothing pass: the particles read as one surface
+  -- two 1-2-1 smoothing passes: the particles read as one surface
+  for _=1,2 do
   for j=0,FH-1 do local row=j*FW
    tmp[row+1]=field[row+1];tmp[row+FW]=field[row+FW]
    for i=1,FW-2 do tmp[row+i+1]=(field[row+i]+2*field[row+i+1]+field[row+i+2])*.25 end end
   for i=0,FW-1 do
    field[i+1]=tmp[i+1];field[(FH-1)*FW+i+1]=tmp[(FH-1)*FW+i+1]
    for j=1,FH-2 do field[j*FW+i+1]=(tmp[(j-1)*FW+i+1]+2*tmp[j*FW+i+1]+tmp[(j+1)*FW+i+1])*.25 end end
+  end
  end
  -- shade this worker's rows: anti-aliased edge, Mercury's rim light, marble inside
  local out=buffer.create((y1-y0)*W*4)
@@ -5095,6 +5118,8 @@ ch.Event:Connect(function(tag,fid,ox,oy,w,h,r,dir,ex,g,cardScale,pos,n,mat)
      local dd=dist>0 and dist or 0
      local shine=exp(-dd*.8)*(.18+.82*light)*.8+exp(-dd*.13)*.22*light;if shine>1 then shine=1 end
      local edge=min(min(x,W-1-x),min(y,H-1-y));if edge<22 then alpha*=edge/22 end
+     -- inside the window the window itself shows: the liquid starts at its edge
+     local inside=sdRR(ox+x+.5,oy+y+.5,0,0,w,h,r);if inside<.5 then alpha*=clamp(inside+.5,0,1) end
      local base=readu32(mat,(y*W+x)*4)
      local br,bg,bb=base%256,floor(base/256)%256,floor(base/65536)%256
      writeu32(out,(orow+x)*4,floor(br+(RIM_R-br)*shine+.5)+floor(bg+(RIM_G-bg)*shine+.5)*256+floor(bb+(RIM_B-bb)*shine+.5)*65536+floor(alpha*255+.5)*16777216)

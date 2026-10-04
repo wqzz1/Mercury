@@ -619,7 +619,7 @@ corner(toast, 18)
 local toastBase = create("Frame", {
     Name = "MarbleBase",
     BackgroundColor3 = Color3.new(1, 1, 1),
-    BackgroundTransparency = 0.04,
+    BackgroundTransparency = 0,
     BorderSizePixel = 0,
     Size = UDim2.fromScale(1, 1),
     ZIndex = 10,
@@ -629,27 +629,31 @@ corner(toastBase, 18)
 create("UIGradient", {
     Rotation = 125,
     Color = colorSeq({
-        {0, Color3.fromRGB(9, 7, 17)},
-        {0.4, Color3.fromRGB(27, 18, 44)},
-        {0.7, Color3.fromRGB(38, 22, 63)},
-        {1, Color3.fromRGB(11, 8, 21)},
+        {0, Color3.fromRGB(7, 7, 10)},
+        {0.4, Color3.fromRGB(22, 21, 27)},
+        {0.7, Color3.fromRGB(28, 20, 42)},
+        {1, Color3.fromRGB(7, 7, 10)},
     }),
     Parent = toastBase,
 })
 if lavaAsset then
-    local toastMarble = create("ImageLabel", {
-        Name = "MarbleLava",
-        BackgroundTransparency = 1,
-        Size = UDim2.fromScale(1, 1),
-        Image = lavaAsset,
-        ImageColor3 = Color3.fromRGB(150, 90, 240),
-        ImageTransparency = 0.38,
-        ImageRectOffset = Vector2.new(25, 20),
-        ImageRectSize = Vector2.new(105, 32),
-        ZIndex = 10,
-        Parent = toastBase,
-    })
-    corner(toastMarble, 18)
+    -- same texels-per-pixel as the window's lava, so the swirls are the same size
+    local texel = PANEL_HEIGHT / Lava.window
+    for index, layer in Lava.layers do
+        local toastMarble = create("ImageLabel", {
+            Name = "MarbleLava" .. index,
+            BackgroundTransparency = 1,
+            Size = UDim2.fromScale(1, 1),
+            Image = lavaAsset,
+            ImageColor3 = layer.color,
+            ImageTransparency = layer.transparency,
+            ImageRectOffset = layer.origin + Vector2.new(25, 20),
+            ImageRectSize = Vector2.new(TOAST_SIZE.X / texel, TOAST_SIZE.Y / texel),
+            ZIndex = 10,
+            Parent = toastBase,
+        })
+        corner(toastMarble, 18)
+    end
 end
 specularRim(toast, 1, 0.5)
 liquidWave(toast, TOAST_SIZE.X, TOAST_SIZE.Y, 18, 10)
