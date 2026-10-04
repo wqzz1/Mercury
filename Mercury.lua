@@ -4643,47 +4643,65 @@ do
   return occl
  end
  local FROST_R,FROST_ALPHA=4,.72   -- blur radius (px) and opacity kept behind glass
- local function occlude(ox,oy)
+ -- bounding box (window px) of a list of {x,y,r} circles
+ local function circleBox(circles)
+  local x0,y0,x1,y1=math.huge,math.huge,-math.huge,-math.huge
+  for _,c in ipairs(circles) do x0=min(x0,c[1]-c[3]);y0=min(y0,c[2]-c[3]);x1=max(x1,c[1]+c[3]);y1=max(y1,c[2]+c[3]) end
+  return {x0-3,y0-3,x1+3,y1+3}
+ end
+ local fA,fR,fG,fB,fT={},{},{},{},{}
+ -- one box-blur pass over a w*h grid (horizontal or vertical), edge-clamped
+ local function boxPass(src,dst,w,h,horizontal)
+  local r=FROST_R;local inv=1/(2*r+1)
+  if horizontal then
+   for y=0,h-1 do
+    local base=y*w;local sum=0
+    for p=-r,r do sum+=src[base+clamp(p,0,w-1)+1] end
+    for x=0,w-1 do
+     dst[base+x+1]=sum*inv
+     sum+=src[base+min(x+r+1,w-1)+1]-src[base+max(x-r,0)+1]
+    end
+   end
+  else
+   for x=0,w-1 do
+    local sum=0
+    for p=-r,r do sum+=src[clamp(p,0,h-1)*w+x+1] end
+    for y=0,h-1 do
+     dst[y*w+x+1]=sum*inv
+     sum+=src[min(y+r+1,h-1)*w+x+1]-src[max(y-r,0)*w+x+1]
+    end
+   end
+  end
+ end
+ -- Frost the drip where controls cover it. Only the drip's own small box is
+ -- blurred (not the whole overlap with the row), so it runs inside one frame.
+ local function occlude(ox,oy,box)
   local list=occluders();if #list==0 then return end
   local readu32,writeu32=buffer.readu32,buffer.writeu32
   for _,o in ipairs(list) do
-   local x0,y0,x1,y1=max(0,floor(o[6]-ox)),max(0,floor(o[7]-oy)),min(OW,ceil(o[8]-ox)),min(OH,ceil(o[9]-oy))
+   local x0,y0=max(0,floor(o[6]-ox),floor(box[1])),max(0,floor(o[7]-oy),floor(box[2]))
+   local x1,y1=min(OW,ceil(o[8]-ox),ceil(box[3])),min(OH,ceil(o[9]-oy),ceil(box[4]))
    if x1>x0 and y1>y0 then
-    -- work area: the covered box plus the blur's reach, premultiplied channels
     local bx0,by0,bx1,by1=max(0,x0-FROST_R),max(0,y0-FROST_R),min(OW,x1+FROST_R),min(OH,y1+FROST_R)
     local bw,bh=bx1-bx0,by1-by0;local n=bw*bh
-    local A,Rc,Gc,Bc=table.create(n,0),table.create(n,0),table.create(n,0),table.create(n,0)
     local any=false
-    for y=by0,by1-1 do local row=(y-by0)*bw
+    for i=1,n do fA[i]=0;fR[i]=0;fG[i]=0;fB[i]=0 end
+    for y=by0,by1-1 do local row=(y-by0)*bw-bx0+1
      for x=bx0,bx1-1 do local v=readu32(pixels,(y*OW+x)*4);local al=floor(v/16777216)
-      if al>0 then any=true;local i=row+(x-bx0)+1;A[i]=al;Rc[i]=(v%256)*al;Gc[i]=(floor(v/256)%256)*al;Bc[i]=(floor(v/65536)%256)*al end
+      if al>0 then any=true;local i=row+x;fA[i]=al;fR[i]=(v%256)*al;fG[i]=(floor(v/256)%256)*al;fB[i]=(floor(v/65536)%256)*al end
      end
     end
     if any then
-     -- separable box blur, applied twice (close to a gaussian)
-     local function pass(src,dst,horizontal)
-      local len,lines=horizontal and bw or bh,horizontal and bh or bw
-      local inv=1/(2*FROST_R+1)
-      for l=0,lines-1 do
-       if l%16==15 then pace() end
-       local function idx(p) if horizontal then return l*bw+p+1 else return p*bw+l+1 end end
-       local sum=0
-       for p=-FROST_R,FROST_R do sum+=src[idx(clamp(p,0,len-1))] end
-       for p=0,len-1 do
-        dst[idx(p)]=sum*inv
-        sum+=src[idx(min(p+FROST_R+1,len-1))]-src[idx(max(p-FROST_R,0))]
-       end
-      end
+     local orig={}
+     for _,ch in ipairs({fA,fR,fG,fB}) do
+      local keep=table.create(n);table.move(ch,1,n,1,keep);orig[#orig+1]=keep
+      boxPass(ch,fT,bw,bh,true);boxPass(fT,ch,bw,bh,false)
+      boxPass(ch,fT,bw,bh,true);boxPass(fT,ch,bw,bh,false)
      end
-     local tmp=table.create(n,0)
-     for _,ch in ipairs({A,Rc,Gc,Bc}) do
-      local work=table.create(n,0);table.move(ch,1,n,1,work)
-      pass(work,tmp,true);pass(tmp,work,false);pass(work,tmp,true);pass(tmp,work,false)
-      ch.blur=work
-     end
+     local oA,oR,oG,oB=orig[1],orig[2],orig[3],orig[4]
      local L,T,R,B,rad=o[1]-ox,o[2]-oy,o[3]-ox,o[4]-oy,o[5]
+     local s=FROST_ALPHA
      for y=y0,y1-1 do
-      if (y-y0)%16==15 then pace() end
       local py=y+.5;local dy=max(T+rad-py,py-(B-rad))
       for x=x0,x1-1 do
        local px=x+.5;local dx=max(L+rad-px,px-(R-rad))
@@ -4692,14 +4710,11 @@ do
        local cover=clamp(.5-d,0,1)
        if cover>0 then
         local i=(y-by0)*bw+(x-bx0)+1
-        local ba=A.blur[i]*FROST_ALPHA
-        -- mix original and frosted (premultiplied), then un-premultiply
-        local fa=A[i]+(ba-A[i])*cover
+        local fa=oA[i]+(fA[i]*s-oA[i])*cover
         if fa>.5 then
-         local s=FROST_ALPHA
-         local fr=Rc[i]+(Rc.blur[i]*s-Rc[i])*cover
-         local fg=Gc[i]+(Gc.blur[i]*s-Gc[i])*cover
-         local fb=Bc[i]+(Bc.blur[i]*s-Bc[i])*cover
+         local fr=oR[i]+(fR[i]*s-oR[i])*cover
+         local fg=oG[i]+(fG[i]*s-oG[i])*cover
+         local fb=oB[i]+(fB[i]*s-oB[i])*cover
          writeu32(pixels,(y*OW+x)*4,min(255,floor(fr/fa+.5))+min(255,floor(fg/fa+.5))*256+min(255,floor(fb/fa+.5))*65536+min(255,floor(fa+.5))*16777216)
         else
          writeu32(pixels,(y*OW+x)*4,0)
@@ -4733,7 +4748,7 @@ do
     local ox,oy=floor((x-WINDOW/2)/S)*S,floor((y-WINDOW/2)/S)*S
     local bodies={{x-ox,y-oy,R},{x-ox,y-tail-oy,R*.55}}
     use(item.surface);clearRow=nil
-    postProcess=function() tintCircles(bodies,DRIP_TINT);occlude(ox,oy) end
+    postProcess=function() tintCircles(bodies,DRIP_TINT);occlude(ox,oy,circleBox(bodies)) end
     material.compose=function() return shared.material.sheetAt(-ox,-oy) end
     render({},bodies,nil)
     postProcess=nil
@@ -4780,7 +4795,7 @@ do
   use(item.surface);clearRow=nil
   local top=floor((ey-oy)/S)+1
   local clipBytes=min(OH,top*S+2)*OW*4
-  postProcess=function() fill(pixels,0,0,clipBytes);tintCircles(local_,DRIP_TINT);occlude(ox,oy) end
+  postProcess=function() fill(pixels,0,0,clipBytes);tintCircles(local_,DRIP_TINT);occlude(ox,oy,circleBox(local_)) end
   material.compose=function() return shared.material.sheetAt(-ox,-oy) end
   render(band,local_,nil)
   postProcess=nil
@@ -4833,7 +4848,7 @@ do
      if d.impact then
       local fadeTint=DRIP_TINT*(1-clamp(t/(d.bud+d.float*.5),0,1))
       local own={};for j,b in ipairs(bodies) do own[j]={b[1]-ox,b[2]-oy,b[3]} end
-      postProcess=function() feather();tintCircles(own,fadeTint);occlude(ox,oy) end
+      postProcess=function() feather();tintCircles(own,fadeTint);occlude(ox,oy,circleBox(own)) end
      end
      material.compose=function() return shared.material.sheetAt(-ox,-oy) end
      render(points,local_,{floor(x0/S),floor(y0/S),ceil(x1/S)-1,ceil(y1/S)-1})
