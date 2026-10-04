@@ -3571,7 +3571,7 @@ do
    if image then image:WritePixelsBuffer(Vector2.zero,Vector2.new(eside,eside),pixels);return {image=image,side=eside,margin=cardMargin,radius=measured} end
   end
  end
- if ok then api.espRim=cardRim(14);toastRim=cardRim(18);Resize.beadRim=cardRim(13) end
+ if ok then api.espRim=cardRim(14);toastRim=cardRim(18);Resize.beadRim=cardRim(12) end
  W,H,OW,OH,mask,temp,zeros,ones,pixels,tiles,P,cx,cy=table.unpack(saved,1,13)
  local backdropCorner=backdrop:FindFirstChildWhichIsA('UICorner')
  if contourRadius and backdropCorner then
@@ -6242,11 +6242,74 @@ local function addColorPicker(container, config)
         Position = UDim2.new(1, -156, 0, 0), Size = UDim2.new(0, 80, 1, 0),
         FontFace = font(Enum.FontWeight.SemiBold), TextSize = 12, TextColor3 = Theme.mistDim,
         TextXAlignment = Enum.TextXAlignment.Right, ZIndex = 5, Parent = header})
+    -- Picker art, baked once per window at 4x and drawn as images: every knob
+    -- layer is the same-size image (the insets live inside the pixels), so the
+    -- layers are always exactly concentric and the same size at any UIScale;
+    -- the bead's gloss is one smooth image instead of stacked frames.
+    local function pickerArt()
+        if Resize.pickerArt ~= nil then return Resize.pickerArt or nil end
+        local ok, art = pcall(function()
+            local AS = game:GetService("AssetService")
+            local function smoothstep(e0, e1, x) local t = math.clamp((x - e0) / (e1 - e0), 0, 1); return t * t * (3 - 2 * t) end
+            local function bake(n, shade)
+                local buf = buffer.create(n * n * 4)
+                for y = 0, n - 1 do for x = 0, n - 1 do
+                    local u, v = (x + 0.5) / n * 2 - 1, (y + 0.5) / n * 2 - 1
+                    local rgb, alpha = shade(u, v, math.sqrt(u * u + v * v))
+                    alpha = math.clamp(alpha, 0, 1)
+                    if alpha > 0 then
+                        local c = math.floor(math.clamp(rgb, 0, 1) * 255 + 0.5)
+                        buffer.writeu32(buf, (y * n + x) * 4, c + c * 256 + c * 65536 + math.floor(alpha * 255 + 0.5) * 16777216)
+                    end
+                end end
+                local image = AS:CreateEditableImage({Size = Vector2.new(n, n)})
+                image:WritePixelsBuffer(Vector2.zero, Vector2.new(n, n), buf)
+                return image
+            end
+            -- anti-aliased disc of radius `edge` (fraction of the half-size), `n` px texture
+            local function disc(n, edge)
+                local px = n / 2
+                return bake(n, function(_, _, r) return 1, (edge - r) * px / 2.2 + 0.5 end)
+            end
+            local K = 22 * 4 -- knob texture: 22 logical px (knob 18 + shadow ring)
+            local result = {}
+            result.knobBase = bake(K, function(_, _, r)
+                local white = math.clamp((9 / 11 - r) * (K / 2) / 2.2 + 0.5, 0, 1)
+                local shadow = 0.34 * (1 - smoothstep(0.72, 1, r))
+                local a = white + shadow * (1 - white)
+                return (a > 0 and white / a or 0), a
+            end)
+            result.knobWell = disc(K, 5 / 11)
+            result.knobFill = disc(K, 6 / 11)
+            local B = 24 * 4 -- bead gloss: depth shade, highlight and a faint caustic
+            result.beadGloss = bake(B, function(u, v, r)
+                local cover = math.clamp((1 - r) * (B / 2) / 2.2 + 0.5, 0, 1)
+                if cover <= 0 then return 0, 0 end
+                local depth = 0.5 * smoothstep(-0.2, 1, v) ^ 1.4 + 0.2 * r ^ 4
+                -- soft specular window, top-left, following the curve
+                local du, dv = u + 0.3, v + 0.43
+                local ca, sa = math.cos(math.rad(35)), math.sin(math.rad(35))
+                local xr, yr = du * ca + dv * sa, -du * sa + dv * ca
+                local e = math.sqrt((xr / 0.5) ^ 2 + (yr / 0.27) ^ 2)
+                local highlight = 0.8 * (1 - smoothstep(0.1, 1, e))
+                -- light bending through the bottom-right of the glass
+                local caustic = 0.28 * smoothstep(0.66, 0.95, r) * (1 - smoothstep(0.95, 1, r)) * smoothstep(0.2, 0.85, u * 0.5 + v * 0.86)
+                local white = math.max(highlight, caustic)
+                local a = white + depth * (1 - white)
+                return (a > 0 and white / a or 0), a * cover
+            end)
+            return result
+        end)
+        Resize.pickerArt = ok and art or false
+        if not ok then warn("[Mercury] picker art unavailable: " .. tostring(art)) end
+        return ok and art or nil
+    end
+    local art = pickerArt()
     -- Preview: a liquid-glass bead filled with the colour. The colour is the
     -- liquid; over it sit a soft depth shade, the window's own liquid rim
     -- (9-sliced at the bead's radius) and a specular highlight. It wobbles like
     -- a droplet when the colour changes.
-    local BEAD = 26
+    local BEAD = 24
     local beadHolder = create("Frame", {Name = "Swatch", BackgroundTransparency = 1,
         AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(1, -51, 0.5, 0),
         Size = UDim2.fromOffset(BEAD, BEAD), ZIndex = 5, Parent = header})
@@ -6255,11 +6318,17 @@ local function addColorPicker(container, config)
     local swatch = create("Frame", {Name = "Fill", BorderSizePixel = 0, Size = UDim2.fromScale(1, 1),
         ZIndex = 6, Parent = bead})
     corner(swatch, UDim.new(0.5, 0))
-    local depth = create("Frame", {Name = "Depth", BackgroundColor3 = Color3.new(0, 0, 0), BorderSizePixel = 0,
-        Size = UDim2.fromScale(1, 1), ZIndex = 7, Parent = bead})
-    corner(depth, UDim.new(0.5, 0))
-    create("UIGradient", {Rotation = 90,
-        Transparency = numberSeq({{0, 1}, {0.45, 1}, {1, 0.55}}), Parent = depth})
+    local depth
+    if art then
+        depth = create("ImageLabel", {Name = "Gloss", BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1),
+            ImageContent = Content.fromObject(art.beadGloss), ZIndex = 7, Parent = bead})
+    else
+        depth = create("Frame", {Name = "Depth", BackgroundColor3 = Color3.new(0, 0, 0), BorderSizePixel = 0,
+            Size = UDim2.fromScale(1, 1), ZIndex = 7, Parent = bead})
+        corner(depth, UDim.new(0.5, 0))
+        create("UIGradient", {Rotation = 90,
+            Transparency = numberSeq({{0, 1}, {0.45, 1}, {1, 0.55}}), Parent = depth})
+    end
     local beadRim = Resize.beadRim
     if beadRim then
         local k = Layout.uiScale
@@ -6272,12 +6341,6 @@ local function addColorPicker(container, config)
     else
         specularRim(depth, 1, 0.2)
     end
-    local glint = create("Frame", {Name = "Highlight", BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0,
-        AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.36, 0.3),
-        Size = UDim2.fromScale(0.42, 0.24), Rotation = -32, ZIndex = 9, Parent = bead})
-    corner(glint, UDim.new(0.5, 0))
-    create("UIGradient", {Rotation = 90,
-        Transparency = numberSeq({{0, 0.35}, {0.6, 0.8}, {1, 1}}), Parent = glint})
     local wobbling, beadShown = false, false
     local function wobble()
         if not beadShown then beadShown = true; return end -- no wobble for the first colour
@@ -6320,6 +6383,17 @@ local function addColorPicker(container, config)
     -- stroke around a fill leaves a 1px seam when UIScale makes sizes fractional).
     -- Every layer is inset from its parent's edges so it stays exactly centred.
     local function makeKnob(parent, size, z)
+        if art then
+            local holder = create("Frame", {Name = "KnobShadow", AnchorPoint = Vector2.new(0.5, 0.5),
+                BackgroundTransparency = 1, Size = UDim2.fromOffset(size + 4, size + 4), ZIndex = z, Parent = parent})
+            local function layer(image, name, zz)
+                return create("ImageLabel", {Name = name, BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1),
+                    ImageContent = Content.fromObject(image), ZIndex = zz, Parent = holder})
+            end
+            layer(art.knobBase, "Rim", z + 1)
+            layer(art.knobWell, "Well", z + 2).ImageColor3 = Theme.tint
+            return holder, layer(art.knobFill, "Knob", z + 3)
+        end
         local holder = create("Frame", {Name = "KnobShadow", AnchorPoint = Vector2.new(0.5, 0.5),
             BackgroundColor3 = Color3.new(0, 0, 0), BackgroundTransparency = 0.72, BorderSizePixel = 0,
             Size = UDim2.fromOffset(size + 4, size + 4), ZIndex = z, Parent = parent})
@@ -6337,7 +6411,11 @@ local function addColorPicker(container, config)
         corner(fill, UDim.new(0.5, 0))
         return holder, fill
     end
-    local shadeKnobHolder, shadeKnob = makeKnob(shade, 16, 7)
+    local shadeKnobHolder, shadeKnob = makeKnob(shade, KNOB, 7)
+    local function paintKnob(knob, color, transparency)
+        if knob:IsA("ImageLabel") then knob.ImageColor3 = color; knob.ImageTransparency = transparency or 0
+        else knob.BackgroundColor3 = color; knob.BackgroundTransparency = transparency or 0 end
+    end
 
     local function caption(text, x, y, w, align)
         return create("TextLabel", {Name = text .. "Label", BackgroundTransparency = 1,
@@ -6431,20 +6509,19 @@ local function addColorPicker(container, config)
     local function render()
         local base, color = baseColor(), mixedColor()
         shade.BackgroundColor3 = Color3.fromHSV(hue, 1, 1)
-        shadeKnob.BackgroundColor3 = base
+        paintKnob(shadeKnob, base)
         shadeKnobHolder.Position = UDim2.fromScale(saturation, 1 - shadeValue)
-        hueKnob.BackgroundColor3 = Color3.fromHSV(hue, 1, 1)
+        paintKnob(hueKnob, Color3.fromHSV(hue, 1, 1))
         hueKnobHolder.Position = along(hue)
         brightGradient.Color = ColorSequence.new({
             ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)),
             ColorSequenceKeypoint.new(0.5, base),
             ColorSequenceKeypoint.new(1, Color3.new(0, 0, 0)),
         })
-        brightKnob.BackgroundColor3 = color
+        paintKnob(brightKnob, color)
         brightKnobHolder.Position = along((brightness + 1) / 2)
         alphaFill.BackgroundColor3 = color
-        alphaKnob.BackgroundColor3 = color
-        alphaKnob.BackgroundTransparency = obj.Transparency
+        paintKnob(alphaKnob, color, obj.Transparency)
         alphaKnobHolder.Position = along(obj.Transparency)
         alphaValue.Text = string.format("%d%%", math.round(obj.Transparency * 100))
         if swatch.BackgroundColor3 ~= color then swatch.BackgroundColor3 = color; wobble() end

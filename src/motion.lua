@@ -1673,7 +1673,7 @@ do
    if image then image:WritePixelsBuffer(Vector2.zero,Vector2.new(eside,eside),pixels);return {image=image,side=eside,margin=cardMargin,radius=measured} end
   end
  end
- if ok then api.espRim=cardRim(14);toastRim=cardRim(18);Resize.beadRim=cardRim(13) end
+ if ok then api.espRim=cardRim(14);toastRim=cardRim(18);Resize.beadRim=cardRim(12) end
  W,H,OW,OH,mask,temp,zeros,ones,pixels,tiles,P,cx,cy=table.unpack(saved,1,13)
  local backdropCorner=backdrop:FindFirstChildWhichIsA('UICorner')
  if contourRadius and backdropCorner then
