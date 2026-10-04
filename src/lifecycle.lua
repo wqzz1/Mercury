@@ -1,9 +1,19 @@
 local toastToken = 0
 local function sweepToastGlint(token: number)
-    toastGlintGradient.Offset = Vector2.new(-1.4, 0)
+    ToastGlint.rest()
     task.delay(0.2, function()
         if token ~= toastToken or not toast.Parent then return end
-        tween(toastGlintGradient, 1.1, { Offset = Vector2.new(1.4, 0) }, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
+        local width = toast.AbsoluteSize.X
+        local from, to = -20, width + ToastGlint.SPAN * 0.6 + 20
+        local started, duration = os.clock(), 1.1
+        local connection
+        connection = RunService.Heartbeat:Connect(function()
+            local a = math.clamp((os.clock() - started) / duration, 0, 1)
+            if token ~= toastToken or not toast.Parent then connection:Disconnect(); ToastGlint.rest(); return end
+            local eased = if a < 0.5 then 2 * a * a else 1 - (-2 * a + 2) ^ 2 / 2
+            ToastGlint.at(from + (to - from) * eased)
+            if a >= 1 then connection:Disconnect(); ToastGlint.rest() end
+        end)
     end)
 end
 -- With the liquid morph the rendered card IS the notification's body, so the

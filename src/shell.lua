@@ -717,6 +717,57 @@ local TOAST_STATUS = {
     success = { icon = "check", color = Color3.fromRGB(150, 232, 190) },
     error = { icon = "x", color = Theme.danger },
 }
+-- Glint: the section headings' glint (text brightens toward white as a soft band
+-- with a faint trail passes), swept across the card's text, icon and badge only,
+-- never over the card's body. Each of them is drawn white and coloured by its own
+-- UIGradient; the band is placed in card pixels and slanted \ (lower lines run
+-- ahead), so it reads as one streak across every line.
+local ToastGlint = {SPAN = 120, SLANT = 0.45, targets = {}, statusColor = Theme.mist,
+    POINTS = {0.08, 0.14, 0.2, 0.26, 0.32, 0.37, 0.40, 0.425, 0.45, 0.57, 0.6, 0.63}}
+do
+    local function smooth(a) a = math.clamp(a, 0, 1); return a * a * (3 - 2 * a) end
+    local function glintAt(x)
+        if x < 0.08 then return 0
+        elseif x < 0.40 then return 0.3 * ((x - 0.08) / 0.32) ^ 2.2
+        elseif x < 0.45 then return 0.3 + 0.7 * smooth((x - 0.40) / 0.05)
+        elseif x <= 0.57 then return 1
+        else return 1 - smooth((x - 0.57) / 0.06) end
+    end
+    local WHITE = Color3.new(1, 1, 1)
+    local function add(object, prop, base)
+        object[prop] = WHITE
+        local gradient = create("UIGradient", {Color = ColorSequence.new(base()), Parent = object})
+        table.insert(ToastGlint.targets, {object = object, gradient = gradient, base = base})
+    end
+    add(toastTitle, "TextColor3", function() return Theme.mist end)
+    add(toastContent, "TextColor3", function() return Theme.mistDim end)
+    add(toastBadge, "BackgroundColor3", function() return ToastGlint.statusColor end)
+    add(toastBadgeIcon, "ImageColor3", function() return ToastGlint.statusColor end)
+    function ToastGlint.rest()
+        for _, t in ToastGlint.targets do t.gradient.Color = ColorSequence.new(t.base()) end
+    end
+    -- the band's leading edge at `lead` px from the card's left edge
+    function ToastGlint.at(lead: number)
+        local card = toast.AbsolutePosition
+        local midY = card.Y + toast.AbsoluteSize.Y / 2
+        local span = ToastGlint.SPAN
+        for _, t in ToastGlint.targets do
+            local o = t.object
+            local x0, w = o.AbsolutePosition.X - card.X, math.max(1, o.AbsoluteSize.X)
+            local cy = o.AbsolutePosition.Y + o.AbsoluteSize.Y / 2
+            local start = lead - 0.63 * span + (cy - midY) * ToastGlint.SLANT
+            local base = t.base()
+            local function colorAt(u) return base:Lerp(WHITE, glintAt((x0 + u * w - start) / span)) end
+            local keys = {ColorSequenceKeypoint.new(0, colorAt(0))}
+            for _, p in ToastGlint.POINTS do
+                local u = (start + p * span - x0) / w
+                if u > 0.001 and u < 0.999 then table.insert(keys, ColorSequenceKeypoint.new(u, colorAt(u))) end
+            end
+            table.insert(keys, ColorSequenceKeypoint.new(1, colorAt(1)))
+            t.gradient.Color = ColorSequence.new(keys)
+        end
+    end
+end
 local function setToastStatus(kind: string?)
     local status = if typeof(kind) == "string" then TOAST_STATUS[string.lower(kind)] else nil
     local data = status and LUCIDE[status.icon]
@@ -725,44 +776,13 @@ local function setToastStatus(kind: string?)
     toastTitle.Size = UDim2.new(1, textWidth, 0, 18)
     toastContent.Size = UDim2.new(1, textWidth, 0, 16)
     if not data then return end
-    toastBadge.BackgroundColor3 = status.color
+    ToastGlint.statusColor = status.color
+    ToastGlint.rest()
     toastBadgeIcon.Image = "rbxassetid://" .. tostring(data[1])
     toastBadgeIcon.ImageRectSize = Vector2.new(data[2], data[3])
     toastBadgeIcon.ImageRectOffset = Vector2.new(data[4], data[5])
-    toastBadgeIcon.ImageColor3 = status.color
 end
--- Glint: one soft streak sweeping across the card, slanted \ (up to the left,
--- down to the right), with a faint eased trail. Clipped to the card's corners.
-local toastGlint = create("Frame", {
-    Name = "Glint",
-    BackgroundColor3 = Theme.spec,
-    BackgroundTransparency = 0,
-    BorderSizePixel = 0,
-    Size = UDim2.fromScale(1, 1),
-    ZIndex = 11,
-    Parent = toast,
-})
-corner(toastGlint, 18)
-local toastGlintKeys = {}
-do
-    local function smooth(a) a = math.clamp(a, 0, 1); return a * a * (3 - 2 * a) end
-    local function strength(x) -- 0..1 brightness across the band (moving right)
-        if x < 0.1 then return 0
-        elseif x < 0.42 then return 0.22 * ((x - 0.1) / 0.32) ^ 2.2
-        elseif x < 0.47 then return 0.22 + 0.78 * smooth((x - 0.42) / 0.05)
-        elseif x <= 0.53 then return 1
-        else return 1 - smooth((x - 0.53) / 0.07) end
-    end
-    for _, x in {0, 0.1, 0.18, 0.26, 0.34, 0.42, 0.445, 0.47, 0.53, 0.565, 0.6, 1} do
-        table.insert(toastGlintKeys, NumberSequenceKeypoint.new(x, 1 - 0.42 * strength(x)))
-    end
-end
-local toastGlintGradient = create("UIGradient", {
-    Rotation = -32,
-    Offset = Vector2.new(-1.4, 0),
-    Transparency = NumberSequence.new(toastGlintKeys),
-    Parent = toastGlint,
-})
+local toastGlint = nil -- (the old body streak; the glint now lives on the text, see ToastGlint)
 local toastFade = collectFade(toast)
 -- collectFade only knows background/text/stroke transparency; the badge's
 -- icon is an image, so add it explicitly or it lingers after the card is gone

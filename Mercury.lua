@@ -1720,6 +1720,57 @@ local TOAST_STATUS = {
     success = { icon = "check", color = Color3.fromRGB(150, 232, 190) },
     error = { icon = "x", color = Theme.danger },
 }
+-- Glint: the section headings' glint (text brightens toward white as a soft band
+-- with a faint trail passes), swept across the card's text, icon and badge only,
+-- never over the card's body. Each of them is drawn white and coloured by its own
+-- UIGradient; the band is placed in card pixels and slanted \ (lower lines run
+-- ahead), so it reads as one streak across every line.
+local ToastGlint = {SPAN = 120, SLANT = 0.45, targets = {}, statusColor = Theme.mist,
+    POINTS = {0.08, 0.14, 0.2, 0.26, 0.32, 0.37, 0.40, 0.425, 0.45, 0.57, 0.6, 0.63}}
+do
+    local function smooth(a) a = math.clamp(a, 0, 1); return a * a * (3 - 2 * a) end
+    local function glintAt(x)
+        if x < 0.08 then return 0
+        elseif x < 0.40 then return 0.3 * ((x - 0.08) / 0.32) ^ 2.2
+        elseif x < 0.45 then return 0.3 + 0.7 * smooth((x - 0.40) / 0.05)
+        elseif x <= 0.57 then return 1
+        else return 1 - smooth((x - 0.57) / 0.06) end
+    end
+    local WHITE = Color3.new(1, 1, 1)
+    local function add(object, prop, base)
+        object[prop] = WHITE
+        local gradient = create("UIGradient", {Color = ColorSequence.new(base()), Parent = object})
+        table.insert(ToastGlint.targets, {object = object, gradient = gradient, base = base})
+    end
+    add(toastTitle, "TextColor3", function() return Theme.mist end)
+    add(toastContent, "TextColor3", function() return Theme.mistDim end)
+    add(toastBadge, "BackgroundColor3", function() return ToastGlint.statusColor end)
+    add(toastBadgeIcon, "ImageColor3", function() return ToastGlint.statusColor end)
+    function ToastGlint.rest()
+        for _, t in ToastGlint.targets do t.gradient.Color = ColorSequence.new(t.base()) end
+    end
+    -- the band's leading edge at `lead` px from the card's left edge
+    function ToastGlint.at(lead: number)
+        local card = toast.AbsolutePosition
+        local midY = card.Y + toast.AbsoluteSize.Y / 2
+        local span = ToastGlint.SPAN
+        for _, t in ToastGlint.targets do
+            local o = t.object
+            local x0, w = o.AbsolutePosition.X - card.X, math.max(1, o.AbsoluteSize.X)
+            local cy = o.AbsolutePosition.Y + o.AbsoluteSize.Y / 2
+            local start = lead - 0.63 * span + (cy - midY) * ToastGlint.SLANT
+            local base = t.base()
+            local function colorAt(u) return base:Lerp(WHITE, glintAt((x0 + u * w - start) / span)) end
+            local keys = {ColorSequenceKeypoint.new(0, colorAt(0))}
+            for _, p in ToastGlint.POINTS do
+                local u = (start + p * span - x0) / w
+                if u > 0.001 and u < 0.999 then table.insert(keys, ColorSequenceKeypoint.new(u, colorAt(u))) end
+            end
+            table.insert(keys, ColorSequenceKeypoint.new(1, colorAt(1)))
+            t.gradient.Color = ColorSequence.new(keys)
+        end
+    end
+end
 local function setToastStatus(kind: string?)
     local status = if typeof(kind) == "string" then TOAST_STATUS[string.lower(kind)] else nil
     local data = status and LUCIDE[status.icon]
@@ -1728,44 +1779,13 @@ local function setToastStatus(kind: string?)
     toastTitle.Size = UDim2.new(1, textWidth, 0, 18)
     toastContent.Size = UDim2.new(1, textWidth, 0, 16)
     if not data then return end
-    toastBadge.BackgroundColor3 = status.color
+    ToastGlint.statusColor = status.color
+    ToastGlint.rest()
     toastBadgeIcon.Image = "rbxassetid://" .. tostring(data[1])
     toastBadgeIcon.ImageRectSize = Vector2.new(data[2], data[3])
     toastBadgeIcon.ImageRectOffset = Vector2.new(data[4], data[5])
-    toastBadgeIcon.ImageColor3 = status.color
 end
--- Glint: one soft streak sweeping across the card, slanted \ (up to the left,
--- down to the right), with a faint eased trail. Clipped to the card's corners.
-local toastGlint = create("Frame", {
-    Name = "Glint",
-    BackgroundColor3 = Theme.spec,
-    BackgroundTransparency = 0,
-    BorderSizePixel = 0,
-    Size = UDim2.fromScale(1, 1),
-    ZIndex = 11,
-    Parent = toast,
-})
-corner(toastGlint, 18)
-local toastGlintKeys = {}
-do
-    local function smooth(a) a = math.clamp(a, 0, 1); return a * a * (3 - 2 * a) end
-    local function strength(x) -- 0..1 brightness across the band (moving right)
-        if x < 0.1 then return 0
-        elseif x < 0.42 then return 0.22 * ((x - 0.1) / 0.32) ^ 2.2
-        elseif x < 0.47 then return 0.22 + 0.78 * smooth((x - 0.42) / 0.05)
-        elseif x <= 0.53 then return 1
-        else return 1 - smooth((x - 0.53) / 0.07) end
-    end
-    for _, x in {0, 0.1, 0.18, 0.26, 0.34, 0.42, 0.445, 0.47, 0.53, 0.565, 0.6, 1} do
-        table.insert(toastGlintKeys, NumberSequenceKeypoint.new(x, 1 - 0.42 * strength(x)))
-    end
-end
-local toastGlintGradient = create("UIGradient", {
-    Rotation = -32,
-    Offset = Vector2.new(-1.4, 0),
-    Transparency = NumberSequence.new(toastGlintKeys),
-    Parent = toastGlint,
-})
+local toastGlint = nil -- (the old body streak; the glint now lives on the text, see ToastGlint)
 local toastFade = collectFade(toast)
 -- collectFade only knows background/text/stroke transparency; the badge's
 -- icon is an image, so add it explicitly or it lingers after the card is gone
@@ -5170,7 +5190,7 @@ local floor,min,max,sqrt=math.floor,math.min,math.max,math.sqrt
 local rng=Random.new()
 local function rand(a,b) return rng:NextNumber(a,b) end
 local function clamp01(v) if v<0 then return 0 elseif v>1 then return 1 end return v end
-local FL={h=15,rho0=3,k=.75,kn=2.5,sig=.32,beta=.14,maxV=6.5,count=260,rush=5.6,rate=8}
+local FL={h=15,rho0=3,k=.6,kn=2.2,sig=.6,beta=.3,maxV=6.5,count=260,rush=5.6,rate=8}
 local function sdRound(x,y,x0,y0,x1,y1,r)
  local qx=math.abs(x-(x0+x1)/2)-((x1-x0)/2-r);local qy=math.abs(y-(y0+y1)/2)-((y1-y0)/2-r)
  local ox,oy=max(qx,0),max(qy,0)
@@ -5434,8 +5454,20 @@ conn=ch.Event:Connect(function(tag,fid,ox,oy,w,h,r,dir,ex,g,cardScale,pos,n,mat,
       end
      end
      local edge=min(min(x,W-1-x),min(y,H-1-y));if edge<22 then alpha*=edge/22 end
-     -- inside the window the window itself shows: the liquid starts at its edge
-     if pv>0 then local inside=sdRR(ox+x+.5,oy+y+.5,0,0,w,h,r);if inside<.5 then alpha*=clamp(inside+.5,0,1) end end
+     -- At the window the liquid is drawn only where the flowing liquid joins it:
+     -- there the window's own edge and rim light bend smoothly into the stream
+     -- (the merged outline), and they fade back to the real window around it.
+     if pv>.02 then
+      local joined=clamp((v-pv-cv-.08)/.25,0,1)
+      alpha*=joined
+      if joined>0 then
+       local light=(gx*.6+gy*.8)/gl;if light<0 then light=0 elseif light>1 then light=1 end
+       local dd=dist>0 and dist or 0
+       local key=floor(dd*16);if key>1024 then key=1024 end
+       local ps=(RIM_NEAR[key]*(.18+.82*light)+RIM_BROAD[key]*light)*joined
+       if ps>shine then shine=ps>1 and 1 or ps end
+      end
+     end
      -- on the card side the card's own outline bounds the liquid: blobs never bulge past it
      local px=ox+x+.5
      if dir*(px-ex)>g.gap+.5 then
@@ -5443,8 +5475,6 @@ conn=ch.Event:Connect(function(tag,fid,ox,oy,w,h,r,dir,ex,g,cardScale,pos,n,mat,
       local sc=sdRR(px,oy+y+.5,mid-g.cw/2,g.cy-g.ch/2,mid+g.cw/2,g.cy+g.ch/2,g.rad)
       if sc>-.5 then alpha*=clamp(.5-sc,0,1) end
      end
-     -- where only the window's own shape reaches (its border), the window's rim shows
-     local own=v-pv;if pv>.02 and own<.14 then alpha*=clamp(own/.14,0,1) end
      if maskMode then
       -- the settled card's shape: alpha, and the rim light's strength in red
       writeu32(out,(orow+x)*4,floor(shine*255+.5)+floor(alpha*255+.5)*16777216)
@@ -6135,10 +6165,20 @@ end
 -- source: lifecycle.lua
 local toastToken = 0
 local function sweepToastGlint(token: number)
-    toastGlintGradient.Offset = Vector2.new(-1.4, 0)
+    ToastGlint.rest()
     task.delay(0.2, function()
         if token ~= toastToken or not toast.Parent then return end
-        tween(toastGlintGradient, 1.1, { Offset = Vector2.new(1.4, 0) }, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
+        local width = toast.AbsoluteSize.X
+        local from, to = -20, width + ToastGlint.SPAN * 0.6 + 20
+        local started, duration = os.clock(), 1.1
+        local connection
+        connection = RunService.Heartbeat:Connect(function()
+            local a = math.clamp((os.clock() - started) / duration, 0, 1)
+            if token ~= toastToken or not toast.Parent then connection:Disconnect(); ToastGlint.rest(); return end
+            local eased = if a < 0.5 then 2 * a * a else 1 - (-2 * a + 2) ^ 2 / 2
+            ToastGlint.at(from + (to - from) * eased)
+            if a >= 1 then connection:Disconnect(); ToastGlint.rest() end
+        end)
     end)
 end
 -- With the liquid morph the rendered card IS the notification's body, so the

@@ -3176,7 +3176,7 @@ local floor,min,max,sqrt=math.floor,math.min,math.max,math.sqrt
 local rng=Random.new()
 local function rand(a,b) return rng:NextNumber(a,b) end
 local function clamp01(v) if v<0 then return 0 elseif v>1 then return 1 end return v end
-local FL={h=15,rho0=3,k=.75,kn=2.5,sig=.32,beta=.14,maxV=6.5,count=260,rush=5.6,rate=8}
+local FL={h=15,rho0=3,k=.6,kn=2.2,sig=.6,beta=.3,maxV=6.5,count=260,rush=5.6,rate=8}
 local function sdRound(x,y,x0,y0,x1,y1,r)
  local qx=math.abs(x-(x0+x1)/2)-((x1-x0)/2-r);local qy=math.abs(y-(y0+y1)/2)-((y1-y0)/2-r)
  local ox,oy=max(qx,0),max(qy,0)
@@ -3440,8 +3440,20 @@ conn=ch.Event:Connect(function(tag,fid,ox,oy,w,h,r,dir,ex,g,cardScale,pos,n,mat,
       end
      end
      local edge=min(min(x,W-1-x),min(y,H-1-y));if edge<22 then alpha*=edge/22 end
-     -- inside the window the window itself shows: the liquid starts at its edge
-     if pv>0 then local inside=sdRR(ox+x+.5,oy+y+.5,0,0,w,h,r);if inside<.5 then alpha*=clamp(inside+.5,0,1) end end
+     -- At the window the liquid is drawn only where the flowing liquid joins it:
+     -- there the window's own edge and rim light bend smoothly into the stream
+     -- (the merged outline), and they fade back to the real window around it.
+     if pv>.02 then
+      local joined=clamp((v-pv-cv-.08)/.25,0,1)
+      alpha*=joined
+      if joined>0 then
+       local light=(gx*.6+gy*.8)/gl;if light<0 then light=0 elseif light>1 then light=1 end
+       local dd=dist>0 and dist or 0
+       local key=floor(dd*16);if key>1024 then key=1024 end
+       local ps=(RIM_NEAR[key]*(.18+.82*light)+RIM_BROAD[key]*light)*joined
+       if ps>shine then shine=ps>1 and 1 or ps end
+      end
+     end
      -- on the card side the card's own outline bounds the liquid: blobs never bulge past it
      local px=ox+x+.5
      if dir*(px-ex)>g.gap+.5 then
@@ -3449,8 +3461,6 @@ conn=ch.Event:Connect(function(tag,fid,ox,oy,w,h,r,dir,ex,g,cardScale,pos,n,mat,
       local sc=sdRR(px,oy+y+.5,mid-g.cw/2,g.cy-g.ch/2,mid+g.cw/2,g.cy+g.ch/2,g.rad)
       if sc>-.5 then alpha*=clamp(.5-sc,0,1) end
      end
-     -- where only the window's own shape reaches (its border), the window's rim shows
-     local own=v-pv;if pv>.02 and own<.14 then alpha*=clamp(own/.14,0,1) end
      if maskMode then
       -- the settled card's shape: alpha, and the rim light's strength in red
       writeu32(out,(orow+x)*4,floor(shine*255+.5)+floor(alpha*255+.5)*16777216)
