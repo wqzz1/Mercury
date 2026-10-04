@@ -1,3 +1,6 @@
+-- header buttons and footer items sit this far in from the panel's side edges,
+-- matching the header buttons' 15px gap from the top edge
+local CORNER_INSET = 15
 local CONTENT_Y = Layout.tabsY + Layout.tabsHeight + Layout.gap
 local FOOTER_Y = CONTENT_Y + pageHeight + Layout.gap
 local PANEL_WIDTH = Layout.width
@@ -243,7 +246,7 @@ local header: Frame = create("Frame", {
 local logo: Frame = create("Frame", {
     BackgroundColor3 = Theme.mist,
     BorderSizePixel = 0,
-    Position = UDim2.fromOffset(Layout.padX, 22),
+    Position = UDim2.fromOffset(CORNER_INSET + 7, 22), -- centre mirrors the close button's (27px in)
     Size = UDim2.fromOffset(10, 10),
     ZIndex = 2,
     Parent = header,
@@ -257,7 +260,7 @@ local logoGradient: UIGradient = create("UIGradient", {
 local gameTitle: TextLabel = create("TextLabel", {
     Name = "Title",
     BackgroundTransparency = 1,
-    Position = UDim2.fromOffset(Layout.padX + 21, 16),
+    Position = UDim2.fromOffset(CORNER_INSET + 28, 16),
     Size = UDim2.new(1, -150, 0, 22),
     FontFace = font(Enum.FontWeight.Bold),
     Text = "Loading game…",
@@ -283,7 +286,7 @@ local closeButton: TextButton = create("TextButton", {
     Name = "Close",
     AnchorPoint = Vector2.new(0.5, 0.5),
     Size = UDim2.fromOffset(24, 24),
-    Position = UDim2.new(1, -Layout.padX - 12, 0, 27),
+    Position = UDim2.new(1, -CORNER_INSET - 12, 0, 27), -- 15px from the top (27-12) and from the right
     BackgroundColor3 = Theme.mist,
     BackgroundTransparency = 0.93,
     AutoButtonColor = false,
@@ -322,7 +325,7 @@ do
         Name = "Minimize",
         AnchorPoint = Vector2.new(0.5, 0.5),
         Size = UDim2.fromOffset(24, 24),
-        Position = UDim2.new(1, -Layout.padX - 12 - 24 - 8, 0, 27),
+        Position = UDim2.new(1, -CORNER_INSET - 12 - 24 - 8, 0, 27),
         BackgroundColor3 = Theme.mist,
         BackgroundTransparency = 0.93,
         AutoButtonColor = false,
@@ -494,7 +497,7 @@ create("TextLabel", {
     Name = "Credit",
     BackgroundTransparency = 1,
     AnchorPoint = Vector2.new(0, 0.5),
-    Position = UDim2.new(0, Layout.padX + 2, 1, FOOTER_Y + Layout.footerHeight / 2 - PANEL_HEIGHT),
+    Position = UDim2.new(0, CORNER_INSET + 2, 1, FOOTER_Y + Layout.footerHeight / 2 - PANEL_HEIGHT),
     Size = UDim2.fromOffset(150, 16),
     FontFace = font(Enum.FontWeight.Medium),
     Text = options.Footer or "made by ego",
@@ -515,7 +518,7 @@ local biolinkButton: TextButton = create("TextButton", {
     BackgroundColor3 = Theme.mist,
     BackgroundTransparency = 0.93,
     AnchorPoint = Vector2.new(1, 0.5),
-    Position = UDim2.new(1, -Layout.padX, 1, FOOTER_Y + Layout.footerHeight / 2 - PANEL_HEIGHT),
+    Position = UDim2.new(1, -CORNER_INSET, 1, FOOTER_Y + Layout.footerHeight / 2 - PANEL_HEIGHT),
     AutomaticSize = Enum.AutomaticSize.X,
     Size = UDim2.fromOffset(0, Layout.footerHeight),
     ZIndex = 3,
@@ -807,10 +810,10 @@ local function fullWidth(height: number): UDim2
     return UDim2.new(1, -Layout.padX * 2, 0, height)
 end
 
-addBone(UDim2.fromOffset(Layout.padX, 22), UDim2.fromOffset(10, 10))
-addBone(UDim2.fromOffset(Layout.padX + 17, 21), UDim2.fromOffset(100, 12))
-addBone(UDim2.new(1, -Layout.padX - 24, 0, 15), UDim2.fromOffset(24, 24))
-addBone(UDim2.new(1, -Layout.padX - 24 - 8 - 24, 0, 15), UDim2.fromOffset(24, 24)) -- minimize
+addBone(UDim2.fromOffset(CORNER_INSET + 7, 22), UDim2.fromOffset(10, 10))
+addBone(UDim2.fromOffset(CORNER_INSET + 24, 21), UDim2.fromOffset(100, 12))
+addBone(UDim2.new(1, -CORNER_INSET - 24, 0, 15), UDim2.fromOffset(24, 24))
+addBone(UDim2.new(1, -CORNER_INSET - 24 - 8 - 24, 0, 15), UDim2.fromOffset(24, 24)) -- minimize
 addBone(UDim2.fromOffset(Layout.padX, Layout.tabsY), fullWidth(Layout.tabsHeight))
 -- Content bones are created from the active tab by the library API.
 Resize.addBone = addBone

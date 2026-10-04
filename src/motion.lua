@@ -2616,8 +2616,13 @@ end
 -- bubble's. Each renders in a small window that includes the panel edge it grows
 -- from, faded into the panel at the window border so the rim stays continuous.
 do
- local MAX,WINDOW,MARGIN,FADE=8,208,40,10
+ local MAX,WINDOW,MARGIN,FADE=4,208,40,10  -- at most 4 border bubbles at once (drips are separate and not counted)
  local drops={}
+  -- Tab-bar lava drip (one at a time): liquid gathers under the tab bar, hangs on a
+  -- stretching neck, lets go, falls under gravity behind the controls, and on
+  -- reaching the bottom edge becomes an edge droplet that keeps its impact speed.
+  local drip,nextDrip=nil,nil
+  local DRIP_G=1150   -- px/s^2
  local nextSpawn=1.5
  local outline,outlineKey={},nil
  local pool={}
@@ -2632,14 +2637,16 @@ do
  local function clearAll()
   for _,d in ipairs(drops) do d.slot.label.Visible=false;pool[#pool+1]=d.slot end
   table.clear(drops)
+   if drip then drip.slot.label.Visible=false;pool[#pool+1]=drip.slot;drip=nil end
  end
  local grip=panel:FindFirstChild('ResizeGrip')
  local function spawn(w,h,r,L)
   -- keep away from other droplets and from the resize grip corner
   for _=1,8 do
    local arc=rand(0,L)
-   local x,y=outlineAt(arc,w,h,r)
-   local clear=not (x>w-60 and y>h-60)
+   local x,y,_,ny=outlineAt(arc,w,h,r)
+   -- sides and top only: the bottom edge belongs to the landing lava drips
+   local clear=not (x>w-60 and y>h-60) and ny<.5
    for _,d in ipairs(drops) do local gap=math.abs((d.arc-arc+L/2)%L-L/2);if gap<150 then clear=false end end
    if clear then
     drops[#drops+1]={slot=slot(),start=clock,bud=rand(.7,1.1),float=rand(1.4,3.6),back=rand(1.6,2.6),arc=arc,out=rand(.7,1.15)*REF_R,r=rand(8.5,11.5),speed=rand(.25,.7)*REF_R*(rand(0,1)<.5 and -1 or 1),bob=rand(.6,1.4),phase=rand(0,2*pi),split=rand(0,1)<.4,splitSpin=rand(2.5,4.5)}
@@ -2678,6 +2685,102 @@ do
    end
   end
  end
+
+
+ -- The drip is drawn in the same marble as the panel behind it, so on its own only
+ -- its top-lit rim shows (a hanging drop, merged into the tab bar above, was nearly
+ -- invisible). This lifts the colour inside the drip's circles a little toward the
+ -- rim light, with a soft 2 px edge, so it reads as a glossy bead the whole way.
+ local DRIP_TINT=.16
+ local function tintCircles(circles,amount)
+  if amount<=0 then return end
+  local x0,y0,x1,y1=math.huge,math.huge,-math.huge,-math.huge
+  for _,c in ipairs(circles) do x0=min(x0,c[1]-c[3]);y0=min(y0,c[2]-c[3]);x1=max(x1,c[1]+c[3]);y1=max(y1,c[2]+c[3]) end
+  x0,y0,x1,y1=max(0,floor(x0)),max(0,floor(y0)),min(OW-1,ceil(x1)),min(OH-1,ceil(y1))
+  local readu32,writeu32=buffer.readu32,buffer.writeu32
+  for y=y0,y1 do
+   for x=x0,x1 do
+    local f=0
+    for _,c in ipairs(circles) do
+     local dx,dy=x+.5-c[1],y+.5-c[2]
+     local inside=(c[3]-sqrt(dx*dx+dy*dy))/2
+     if inside>f then f=inside end
+    end
+    if f>0 then
+     if f>1 then f=1 end
+     local off=(y*OW+x)*4;local v=readu32(pixels,off);local a=floor(v/16777216)
+     if a>0 then
+      local s=f*amount;local r,g,b=v%256,floor(v/256)%256,floor(v/65536)%256
+      r=floor(r+(RIM_R-r)*s+.5);g=floor(g+(RIM_G-g)*s+.5);b=floor(b+(RIM_B-b)*s+.5)
+      writeu32(pixels,off,r+g*256+b*65536+a*16777216)
+     end
+    end
+   end
+  end
+ end
+ local function updateDrip(w,h,r)
+  local tb=tabBar
+  if not (tb and tb.Parent and tb.Visible and tb.AbsoluteSize.X>0) then return end
+  local p=tb.AbsolutePosition-panel.AbsolutePosition;local s=tb.AbsoluteSize
+  local lo,hi=p.X+s.Y/2+8,min(p.X+s.X-s.Y/2-8,w-r-70)
+  local ey=p.Y+s.Y
+  if not drip then
+   if not nextDrip then nextDrip=clock+rand(3,6) end
+   if clock<nextDrip or hi<=lo then return end
+   nextDrip=clock+rand(9,16)
+   drip={slot=slot(),start=clock,fx=rand(0,1),F=rand(1.6,2.4),Sd=rand(.75,1.05),R=rand(8.5,10.5)}
+  end
+  local item=drip.slot;local R=drip.R
+  local t=clock-drip.start
+  if t<drip.F+drip.Sd then
+   -- hanging: grow under the edge, then sag on a thinning neck until it pinches off
+   local x=lo+(hi-lo)*drip.fx
+   local bodies={};local cy,rr
+   if t<drip.F then
+    local u=t/drip.F;local e=1-(1-u)^3
+    rr=R*(.3+.7*e)*(1+.05*sin(t*6));cy=ey+rr*.55+3*e
+   else
+    local u=(t-drip.F)/drip.Sd
+    rr=R*(1-.06*u);cy=ey+R*.55+3+26*u*u
+    for i=1,3 do local f=i/4;local nr=R*(.6-.48*u)*(1-.25*f);if nr>.8 then bodies[#bodies+1]={x,ey+(cy-ey)*f*.9,nr} end end
+   end
+   bodies[#bodies+1]={x,cy,rr}
+   drip.x,drip.y1=x,cy
+   local ox,oy=floor((x-WINDOW/2)/S)*S,floor((ey-64)/S)*S
+   -- the tab bar's underside as the parent body; only rows below it are drawn
+   local band={{x-70-ox,ey-30-oy},{x+70-ox,ey-30-oy},{x+70-ox,ey-oy},{x-70-ox,ey-oy}}
+   local local_={};for j,b in ipairs(bodies) do local_[j]={b[1]-ox,b[2]-oy,b[3]} end
+   use(item.surface);clearRow=nil
+   local top=floor((ey-oy)/S)+1
+   local clipBytes=min(OH,top*S+2)*OW*4
+   postProcess=function() fill(pixels,0,0,clipBytes);tintCircles(local_,DRIP_TINT) end
+   material.compose=function() return shared.material.sheetAt(-ox,-oy) end
+   render(band,local_,{0,top,W-1,H-1})
+   postProcess=nil
+   item.label.Position=UDim2.fromOffset(ox/k,oy/k);item.label.Visible=true
+   return
+  end
+  -- free fall from the pinch-off point (starting speed = the sag's final speed)
+  local tau=t-drip.F-drip.Sd;local v0=52/drip.Sd
+  local x=drip.x;local y=drip.y1+v0*tau+.5*DRIP_G*tau*tau;local v=v0+DRIP_G*tau
+  if y+R>=h-3 then
+   -- landing: becomes an edge droplet on the bottom edge, carrying its momentum
+   local sw,sh,q=w-2*r,h-2*r,pi*r/2
+   drops[#drops+1]={slot=item,start=clock,bud=1,float=rand(1.2,2.2),back=rand(1.6,2.4),arc=sw/2+q+sh+q+(w-r-x),out=rand(.75,1)*REF_R,r=R,speed=rand(.12,.3)*REF_R*(rand(0,1)<.5 and -1 or 1),bob=rand(.6,1.2),phase=0,split=false,splitSpin=3,impact={off=y-h,v=v*.22}}
+   drip=nil
+   return
+  end
+  -- a small trailing bead stretches the drop into a teardrop as it speeds up
+  local tail=min(v*.014,R*1.2)
+  local ox,oy=floor((x-WINDOW/2)/S)*S,floor((y-WINDOW/2)/S)*S
+  local bodies={{x-ox,y-oy,R},{x-ox,y-tail-oy,R*.55}}
+  use(item.surface);clearRow=nil
+  postProcess=function() tintCircles(bodies,DRIP_TINT) end
+  material.compose=function() return shared.material.sheetAt(-ox,-oy) end
+  render({},bodies,nil)
+  postProcess=nil
+  item.label.Position=UDim2.fromOffset(ox/k,oy/k);item.label.Visible=true
+ end
  jobs[#jobs+1]={name='edge',interval=0,elapsed=0,
   active=function() return root.Visible and not Resize.dragging end,
   reset=clearAll,
@@ -2689,12 +2792,18 @@ do
     local count=120
     for i=1,count do local x,y=outlineAt((i-1)/count*L,w,h,r);outline[i]={x,y} end
    end
-   if clock>=nextSpawn then if #drops<MAX then spawn(w,h,r,L) end;nextSpawn=clock+rand(.55,1.6) end
+   if clock>=nextSpawn then local border=0;for _,d in ipairs(drops) do if not d.impact then border+=1 end end;if border<MAX then spawn(w,h,r,L) end;nextSpawn=clock+rand(.55,1.6) end
    for i=#drops,1,-1 do
     local d=drops[i];local t=clock-d.start
     if t>=d.bud+d.float+d.back then d.slot.label.Visible=false;pool[#pool+1]=d.slot;table.remove(drops,i) else
      local arc,off,radius,sep,spin=d.arc,0,d.r,0,0
-     if t<d.bud then off=-4+(1-(1-t/d.bud)^3)*d.out
+      if t<d.bud and d.impact then
+       -- landed drip: splashes out past its resting distance, wobbles, settles (damped spring)
+       local im=d.impact;local rest=-4+d.out;local w0,z=12,.34;local wd=w0*sqrt(1-z*z)
+       local A=im.off-rest;local B=(im.v+z*w0*A)/wd;local decay=math.exp(-z*w0*t)
+       local settle=1-clamp((t/d.bud-.75)/.25,0,1)
+       off=rest+decay*(A*cos(wd*t)+B*sin(wd*t))*settle;radius*=1+.12*math.exp(-4*t)*sin(w0*1.3*t)
+     elseif t<d.bud then off=-4+(1-(1-t/d.bud)^3)*d.out
      elseif t<d.bud+d.float then local u=(t-d.bud)/d.float;arc+=d.speed*(t-d.bud);off=-4+d.out+sin((t-d.bud)*d.bob*2+d.phase)*5;radius*=1+.08*sin((t-d.bud)*5)
       if d.split then local s=sin(pi*min(1,u*1.15));sep=s*radius*1.5;spin=(t-d.bud)*d.splitSpin;radius=max(8,radius*(1-.12*s)) end
      else local q=(t-d.bud-d.float)/d.back;local pull=-(cos(pi*min(1,q*1.05))-1)/2;arc+=d.speed*d.float+d.speed*.4*d.back*(1-(1-q)^2);off=-4+d.out*(1-pull)+sin((t-d.bud)*d.bob*2+d.phase)*5*(1-pull)
@@ -2716,12 +2825,18 @@ do
      local item=d.slot
      use(item.surface);clearRow=nil
      fadeBox={x0,y0,x1,y1};postProcess=feather
+     if d.impact then
+      local fadeTint=DRIP_TINT*(1-clamp(t/(d.bud+d.float*.5),0,1))
+      local own={};for j,b in ipairs(bodies) do own[j]={b[1]-ox,b[2]-oy,b[3]} end
+      postProcess=function() feather();tintCircles(own,fadeTint) end
+     end
      material.compose=function() return shared.material.sheetAt(-ox,-oy) end
      render(points,local_,{floor(x0/S),floor(y0/S),ceil(x1/S)-1,ceil(y1/S)-1})
      postProcess=nil
      item.label.Position=UDim2.fromOffset(ox/k,oy/k);item.label.Visible=true
     end
    end
+   updateDrip(w,h,r)
   end}
 end
 

@@ -647,9 +647,10 @@ function window:CreateTab(name, icon)
         -- title lines up with the row labels inside the glass rows, not the rows' edge
         local TITLE_X = Layout.padX + 20
         local heading = create("TextLabel", {Name = "Heading", BackgroundTransparency = 1,
-            Position = UDim2.fromOffset(TITLE_X, 0), Size = UDim2.new(1, -(TITLE_X + Layout.padX), 0, HEAD_H),
+            -- sized to the text itself (not the row) so the glint's band crosses the letters
+            Position = UDim2.fromOffset(TITLE_X, 0), Size = UDim2.fromOffset(0, HEAD_H), AutomaticSize = Enum.AutomaticSize.X,
             FontFace = font(Enum.FontWeight.Bold), Text = string.upper(title),
-            TextColor3 = Color3.new(1, 1, 1), TextTransparency = 0.18, TextSize = 11, -- white: the glint UIGradient supplies the mist tint (gradients multiply the text colour)
+            TextColor3 = Color3.new(1, 1, 1), TextTransparency = 0.18, TextSize = 13, -- white: the glint UIGradient supplies the mist tint (gradients multiply the text colour)
             TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Center, Parent = holder})
         local mark = create("Frame", {Name = "Rule", BackgroundTransparency = 1,
             Position = UDim2.fromOffset(Layout.padX, HEAD_H / 2 - 2), Size = UDim2.new(1, -Layout.padX * 2, 0, 4), Parent = holder})
@@ -669,9 +670,9 @@ function window:CreateTab(name, icon)
         local glowLayers = {}
         local glint = create("UIGradient", {Rotation = 20, Offset = Vector2.new(-1.2, 0), Color = ColorSequence.new({
             ColorSequenceKeypoint.new(0, Theme.mist),
-            ColorSequenceKeypoint.new(0.42, Theme.mist),
+            ColorSequenceKeypoint.new(0.36, Theme.mist),
             ColorSequenceKeypoint.new(0.5, Color3.new(1, 1, 1)),
-            ColorSequenceKeypoint.new(0.58, Theme.mist),
+            ColorSequenceKeypoint.new(0.64, Theme.mist),
             ColorSequenceKeypoint.new(1, Theme.mist),
         }), Parent = heading})
         task.spawn(function()
