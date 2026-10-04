@@ -7135,14 +7135,13 @@ function window:CreateTab(name, icon)
         -- the title's resting tint follows the theme
         Resize.themeHooks = Resize.themeHooks or {}
         table.insert(Resize.themeHooks, function() if glint.Parent then glint.Color = glintColors() end end)
-        task.spawn(function()
-            local glintRng = Random.new()
-            task.wait(glintRng:NextNumber(0.4, 1.2))
-            while holder.Parent and not state.destroyed do
-                glint.Offset = Vector2.new(-1.2, 0)
-                tween(glint, 2.4, {Offset = Vector2.new(1.2, 0)}, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
-                task.wait(2.4 + glintRng:NextNumber(3, 5))
-            end
+        -- swept on the window's shared glint beat, in sync with the game name
+        Resize.glintListeners = Resize.glintListeners or {}
+        table.insert(Resize.glintListeners, function()
+            if not holder.Parent then return false end
+            glint.Offset = Vector2.new(-1.2, 0)
+            tween(glint, 2.4, {Offset = Vector2.new(1.2, 0)}, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
+            return true
         end)
         -- The rule is the right half of the regular divider: same layer count, taper,
         -- per-layer fade and colour (read from Divider), bright at the title, thinning out.
@@ -7257,15 +7256,26 @@ do
     local titleGlint = create("UIGradient", {Offset = Vector2.new(-1.2, 0), Color = colors(), Parent = gameTitle})
     Resize.themeHooks = Resize.themeHooks or {}
     table.insert(Resize.themeHooks, function() if titleGlint.Parent then titleGlint.Color = colors() end end)
+    Resize.glintListeners = Resize.glintListeners or {}
+    table.insert(Resize.glintListeners, function()
+        if not gameTitle.Parent then return false end
+        fraction = math.clamp(gameTitle.TextBounds.X / math.max(1, gameTitle.AbsoluteSize.X), 0.05, 1)
+        titleGlint.Color = colors()
+        titleGlint.Offset = Vector2.new(-0.7 * fraction, 0)
+        tween(titleGlint, 2.4, {Offset = Vector2.new(1.0 * fraction, 0)}, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
+        return true
+    end)
+    -- One beat for every glint (game name and section titles): they all sweep
+    -- together, every 2.4 s sweep + 2.75 s pause (was 3-5 s, random per title).
     task.spawn(function()
-        local rng = Random.new()
-        task.wait(rng:NextNumber(0.8, 1.6))
-        while gameTitle.Parent and not state.destroyed do
-            fraction = math.clamp(gameTitle.TextBounds.X / math.max(1, gameTitle.AbsoluteSize.X), 0.05, 1)
-            titleGlint.Color = colors()
-            titleGlint.Offset = Vector2.new(-0.7 * fraction, 0)
-            tween(titleGlint, 2.4, {Offset = Vector2.new(1.0 * fraction, 0)}, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
-            task.wait(2.4 + rng:NextNumber(3, 5))
+        task.wait(1)
+        while not state.destroyed do
+            local listeners = Resize.glintListeners or {}
+            for i = #listeners, 1, -1 do
+                local ok, alive = pcall(listeners[i])
+                if not ok or alive == false then table.remove(listeners, i) end
+            end
+            task.wait(2.4 + 2.75)
         end
     end)
 end
