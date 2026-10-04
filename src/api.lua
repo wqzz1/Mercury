@@ -661,28 +661,23 @@ function window:CreateTab(name, icon)
         end
         heading:GetPropertyChangedSignal("TextBounds"):Connect(placeRule)
         placeRule()
-        -- Soft halo behind the title: the library's pre-blurred (true Gaussian) glow
-        -- sprite, tinted lilac and very faint, sized to the text as a small pill.
-        local titleGlow = nil
-        local glowImage = loadEmbeddedImage("skeleton-glow.png", EmbeddedPng.glow)
-        if glowImage then
-            local m, r, s = GLOW_SPRITE.margin, GLOW_SPRITE.radius, GLOW_SPRITE.size
-            local GLOW_RADIUS, GLOW_PAD = 7, 4
-            local scale = GLOW_RADIUS / r
-            local spread = m * scale
-            titleGlow = create("ImageLabel", {Name = "TitleGlow", BackgroundTransparency = 1, Image = glowImage,
-                ImageColor3 = Theme.lilac, ImageTransparency = 0.84, ScaleType = Enum.ScaleType.Slice,
-                SliceCenter = Rect.new(m + r, m + r, s - m - r, s - m - r), SliceScale = scale,
-                AnchorPoint = Vector2.new(0, 0.5), ZIndex = 0, Parent = holder})
-            passThrough(titleGlow)
-            local function placeGlow()
-                local bounds = heading.TextBounds
-                titleGlow.Position = UDim2.fromOffset(TITLE_X - GLOW_PAD - spread, HEAD_H / 2)
-                titleGlow.Size = UDim2.fromOffset(bounds.X + (GLOW_PAD + spread) * 2, math.max(bounds.Y, 11) + (GLOW_PAD + spread) * 2)
-            end
-            heading:GetPropertyChangedSignal("TextBounds"):Connect(placeGlow)
-            placeGlow()
-        end        -- The rule is the right half of the regular divider: same layer count, taper,
+        -- Glyph glow: copies of the title text stacked behind it, each with a round
+        -- lilac stroke a little wider and fainter than the last. The strokes follow
+        -- the letter shapes, so the glow hugs each glyph like a soft shadow, and the
+        -- overlapping layers give a smooth falloff away from the letters.
+        local glowLayers = {}
+        local GLOW = {{1, 0.80}, {2, 0.88}, {3, 0.93}, {4.5, 0.965}}
+        for index, spec in GLOW do
+            local copy = create("TextLabel", {Name = "TitleGlow" .. index, BackgroundTransparency = 1,
+                Position = heading.Position, Size = heading.Size, FontFace = heading.FontFace,
+                Text = heading.Text, TextSize = heading.TextSize, TextColor3 = Theme.lilac,
+                TextTransparency = 0.6, TextXAlignment = heading.TextXAlignment,
+                TextYAlignment = heading.TextYAlignment, ZIndex = 0, Parent = holder})
+            local stroke = create("UIStroke", {Color = Theme.lilac, Thickness = spec[1], Transparency = spec[2],
+                LineJoinMode = Enum.LineJoinMode.Round, Parent = copy})
+            table.insert(glowLayers, {stroke = stroke, base = spec[2]})
+        end
+        -- The rule is the right half of the regular divider: same layer count, taper,
         -- per-layer fade and colour (read from Divider), bright at the title, thinning out.
         local LEAD = 0
         local boxHeight = Divider.maxThickness
@@ -738,7 +733,9 @@ function window:CreateTab(name, icon)
         function section:Toggle() return self:SetCollapsed(not self.Collapsed) end
         local function setHover(on)
             tween(heading, 0.18, {TextTransparency = if on then 0 else 0.18})
-            if titleGlow then tween(titleGlow, 0.18, {ImageTransparency = if on then 0.74 else 0.84}) end
+            for _, layer in glowLayers do
+                tween(layer.stroke, 0.18, {Transparency = if on then layer.base - (1 - layer.base) * 0.6 else layer.base})
+            end
             for _, bar in chevronBars do tween(bar, 0.18, {BackgroundColor3 = if on then Theme.mist else Theme.mistDim}) end
         end
         track(headButton.MouseEnter:Connect(function() setHover(true) end))
