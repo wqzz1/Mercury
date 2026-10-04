@@ -3013,13 +3013,14 @@ local ch=get_comm_channel(id)
 local floor,min,max,sqrt=math.floor,math.min,math.max,math.sqrt
 local rng=Random.new()
 local function rand(a,b) return rng:NextNumber(a,b) end
+local function clamp01(v) if v<0 then return 0 elseif v>1 then return 1 end return v end
 local FL={h=15,rho0=3,k=.75,kn=2.5,sig=.32,beta=.14,maxV=6.5,count=260,rush=5.6,rate=8}
 local function sdRound(x,y,x0,y0,x1,y1,r)
  local qx=math.abs(x-(x0+x1)/2)-((x1-x0)/2-r);local qy=math.abs(y-(y0+y1)/2)-((y1-y0)/2-r)
  local ox,oy=max(qx,0),max(qy,0)
  return sqrt(ox*ox+oy*oy)+min(max(qx,qy),0)-r
 end
-local function newSim(g) return {g=g,xs={},ys={},vx={},vy={},px={},py={},t=0,injected=0,neckOpen=true,neckH=11,mode='fill',snapAt=-1,suck=false,absorb=false} end
+local function newSim(g) return {g=g,xs={},ys={},vx={},vy={},px={},py={},t=0,injected=0,neckOpen=true,neckH=3,mode='fill',snapAt=-1,suck=false,absorb=false} end
 local function sdAllowed(sim,x,y)
  local g=sim.g
  local d=sdRound(x,y,g.gap,g.cy-g.ch/2,g.gap+g.cw,g.cy+g.ch/2,g.rad)
@@ -3102,8 +3103,10 @@ local function simFrame(sim)
  sim.t+=1/60
  local g=sim.g
  if sim.mode=='fill' then
-  if sim.t<.18 then if rand(0,1)<.6 then inject(sim,1,1.4,1.5) end
-  elseif sim.injected<FL.count then inject(sim,min(FL.rate,FL.count-sim.injected),FL.rush,4.6)
+  -- the opening widens from a thin bud to the full stream
+  local grow=clamp01((sim.t-.12)/.4);sim.neckH=3+8*grow*grow*(3-2*grow)
+  if sim.t<.3 then if rand(0,1)<.55 then inject(sim,1,1.1,.8) end
+  elseif sim.injected<FL.count then inject(sim,min(FL.rate,FL.count-sim.injected),FL.rush,min(4.6,sim.neckH*.45))
   elseif sim.snapAt<0 then sim.snapAt=sim.t+.12 end
   if sim.snapAt>0 and sim.t>=sim.snapAt and sim.neckOpen then
    sim.neckOpen=false
@@ -3154,7 +3157,16 @@ local floor,min,max,sqrt,exp,abs=math.floor,math.min,math.max,math.sqrt,math.exp
 local readu32,writeu32,readf32=buffer.readu32,buffer.writeu32,buffer.readf32
 local RIM_R,RIM_G,RIM_B=226,214,246
 local FW,FH=W//2+1,H//2+1
-local field,tmp=table.create(FW*FH,0),table.create(FW*FH,0)
+local field,tmp,pf=table.create(FW*FH,0),table.create(FW*FH,0),table.create(FW*FH,0)
+-- 1-2-1 smoothing pass over a 2 px grid array
+local function smooth(a)
+ for j=0,FH-1 do local row=j*FW
+  tmp[row+1]=a[row+1];tmp[row+FW]=a[row+FW]
+  for i=1,FW-2 do tmp[row+i+1]=(a[row+i]+2*a[row+i+1]+a[row+i+2])*.25 end end
+ for i=0,FW-1 do
+  a[i+1]=tmp[i+1];a[(FH-1)*FW+i+1]=tmp[(FH-1)*FW+i+1]
+  for j=1,FH-2 do a[j*FW+i+1]=(tmp[(j-1)*FW+i+1]+2*tmp[j*FW+i+1]+tmp[(j+1)*FW+i+1])*.25 end end
+end
 local function clamp(v,a,b) if v<a then return a elseif v>b then return b end return v end
 local function sdRR(x,y,x0,y0,x1,y1,r)
  local qx=abs(x-(x0+x1)/2)-((x1-x0)/2-r);local qy=abs(y-(y0+y1)/2)-((y1-y0)/2-r)
@@ -3173,12 +3185,14 @@ ch.Event:Connect(function(tag,fid,ox,oy,w,h,r,dir,ex,g,cardScale,pos,n,mat)
   for i=0,FW-1 do
    local px=ox+i*2
    local f=clamp(.5-sdRR(px,py,0,0,w,h,r)/5,0,1.2)
-   if cardScale>0 then local c=clamp(.5-sdRR(px,py,cx0-hw,g.cy-hh,cx0+hw,g.cy+hh,cr)/5,0,1.2);if c>f then f=c end end
-   field[row+i+1]=f
+   local c=0
+   if cardScale>0 then c=clamp(.5-sdRR(px,py,cx0-hw,g.cy-hh,cx0+hw,g.cy+hh,cr)/5,0,1.2) end
+   -- pf keeps the window's own share of the field, so its outline is never drawn
+   if c>f then field[row+i+1]=c;pf[row+i+1]=0 else field[row+i+1]=f;pf[row+i+1]=f end
   end
  end
  if pos and n>0 then
-  local R=6.5;local R2=R*R
+  local R=3.6;local R2=R*R
   for p=0,n-1 do
    local X=ex+dir*readf32(pos,p*8);local Y=readf32(pos,p*8+4)
    local cx,cy=(X-ox)/2,(Y-oy)/2
@@ -3186,17 +3200,10 @@ ch.Event:Connect(function(tag,fid,ox,oy,w,h,r,dir,ex,g,cardScale,pos,n,mat)
    local j0,j1=max(0,floor(cy-R)),min(FH-1,math.ceil(cy+R))
    for j=j0,j1 do local dy=j-cy;local row=j*FW
     for i=i0,i1 do local dx=i-cx;local d2=dx*dx+dy*dy
-     if d2<R2 then local k=1-d2/R2;field[row+i+1]+=k*k*.48 end end end
+     if d2<R2 then local k=1-d2/R2;field[row+i+1]+=k*k*.72 end end end
   end
-  -- two 1-2-1 smoothing passes: the particles read as one surface
-  for _=1,2 do
-  for j=0,FH-1 do local row=j*FW
-   tmp[row+1]=field[row+1];tmp[row+FW]=field[row+FW]
-   for i=1,FW-2 do tmp[row+i+1]=(field[row+i]+2*field[row+i+1]+field[row+i+2])*.25 end end
-  for i=0,FW-1 do
-   field[i+1]=tmp[i+1];field[(FH-1)*FW+i+1]=tmp[(FH-1)*FW+i+1]
-   for j=1,FH-2 do field[j*FW+i+1]=(tmp[(j-1)*FW+i+1]+2*tmp[j*FW+i+1]+tmp[(j+1)*FW+i+1])*.25 end end
-  end
+  -- two smoothing passes: the particles read as one surface
+  smooth(field);smooth(field);smooth(pf);smooth(pf)
  end
  -- shade this worker's rows: anti-aliased edge, Mercury's rim light, marble inside
  local out=buffer.create((y1-y0)*W*4)
@@ -3208,6 +3215,8 @@ ch.Event:Connect(function(tag,fid,ox,oy,w,h,r,dir,ex,g,cardScale,pos,n,mat)
    local a00,a10=field[jy*FW+ix+1],field[jy*FW+ix+2]
    local a01,a11=field[(jy+1)*FW+ix+1],field[(jy+1)*FW+ix+2]
    local v=(a00*(1-tx)+a10*tx)*(1-ty)+(a01*(1-tx)+a11*tx)*ty
+   local i00=jy*FW+ix+1
+   local pv=(pf[i00]*(1-tx)+pf[i00+1]*tx)*(1-ty)+(pf[i00+FW]*(1-tx)+pf[i00+FW+1]*tx)*ty
    if v>.2 then
     local gx=((a10-a00)*(1-ty)+(a11-a01)*ty)/2
     local gy=((a01-a00)*(1-tx)+(a11-a10)*tx)/2
@@ -3221,7 +3230,9 @@ ch.Event:Connect(function(tag,fid,ox,oy,w,h,r,dir,ex,g,cardScale,pos,n,mat)
      local shine=exp(-dd*.8)*(.18+.82*light)*.8+exp(-dd*.13)*.22*light;if shine>1 then shine=1 end
      local edge=min(min(x,W-1-x),min(y,H-1-y));if edge<22 then alpha*=edge/22 end
      -- inside the window the window itself shows: the liquid starts at its edge
-     local inside=sdRR(ox+x+.5,oy+y+.5,0,0,w,h,r);if inside<2.5 then alpha*=clamp(inside-1.5,0,1) end
+     local inside=sdRR(ox+x+.5,oy+y+.5,0,0,w,h,r);if inside<.5 then alpha*=clamp(inside+.5,0,1) end
+     -- where only the window's own shape reaches (its border), the window's rim shows
+     local own=v-pv;if pv>.02 and own<.14 then alpha*=clamp(own/.14,0,1) end
      local base=readu32(mat,(y*W+x)*4)
      local br,bg,bb=base%256,floor(base/256)%256,floor(base/65536)%256
      writeu32(out,(orow+x)*4,floor(br+(RIM_R-br)*shine+.5)+floor(bg+(RIM_G-bg)*shine+.5)*256+floor(bb+(RIM_B-bb)*shine+.5)*65536+floor(alpha*255+.5)*16777216)
