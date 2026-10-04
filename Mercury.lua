@@ -5377,7 +5377,10 @@ conn=ch.Event:Connect(function(tag,fid,ox,oy,w,h,r,dir,ex,g,cardScale,pos,n,mat,
   for i=0,FW-1 do
    local px=ox+i*2
    local f=0
-   if (dir>0 and px<w+4) or (dir<0 and px>-4) then f=clamp(.5-sdRR(px,py,0,0,w,h,r)/5,0,6) end
+   if (dir>0 and px<w+14) or (dir<0 and px>-14) then
+    local sd=sdRR(px,py,0,0,w,h,r)
+    f=sd<=0 and clamp(.5-sd/5,0,6) or clamp(.5-sd/24,0,.5)
+   end
    local c=0
    if cardScale>0 and px>cx0-hw-4 and px<cx0+hw+4 then c=clamp(.5-sdRR(px,py,cx0-hw,g.cy-hh,cx0+hw,g.cy+hh,cr)/5,0,6) end
    -- pf keeps the window's own share of the field, so its outline is never drawn
@@ -5453,8 +5456,17 @@ conn=ch.Event:Connect(function(tag,fid,ox,oy,w,h,r,dir,ex,g,cardScale,pos,n,mat,
         local nl=sqrt(nx*nx+ny*ny)+1e-6
         local light=(-nx*.6-ny*.8)/nl;if light<0 then light=0 elseif light>1 then light=1 end
         local dd=-sd;if dd<0 then dd=0 end
+        -- field just outside the card edge along its normal: liquid there means this edge is inside the liquid
+        local qx,qy=(px+nx/nl*(dd+3)-ox)/2,(py+ny/nl*(dd+3)-oy)/2
+        local qi,qj=floor(qx),floor(qy)
+        local open=1
+        if qi>=0 and qj>=0 and qi<FW-1 and qj<FH-1 then
+         local fx2,fy2=qx-qi,qy-qj;local q00=qj*FW+qi+1
+         local vo=(field[q00]*(1-fx2)+field[q00+1]*fx2)*(1-fy2)+(field[q00+FW]*(1-fx2)+field[q00+FW+1]*fx2)*fy2
+         open=clamp((.5-vo)/.3,0,1)
+        end
         local key=floor(dd*16);if key>1024 then key=1024 end
-        shine=(RIM_NEAR[key]*(.18+.82*light)+RIM_BROAD[key]*light)*rimAmount;if shine>1 then shine=1 end
+        shine=(RIM_NEAR[key]*(.18+.82*light)+RIM_BROAD[key]*light)*rimAmount*open;if shine>1 then shine=1 end
        end
       end
      end
