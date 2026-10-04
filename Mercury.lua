@@ -4944,7 +4944,7 @@ local function substep(sim,dt)
  local n=#xs;if n==0 then return end
  local h=FL.h;local g=sim.g
  local grid=buildGrid(xs,ys,h)
- if sim.suck then for i=1,n do vx[i]-=.85*dt;if xs[i]<g.gap+16 then vy[i]+=(g.cy-ys[i])*.025*dt end end end
+ if sim.suck then for i=1,n do vx[i]-=.5*dt;if xs[i]<g.gap+16 then vy[i]+=(g.cy-ys[i])*.025*dt end end end
  for i=1,n do
   local cx,cy=floor(xs[i]/h),floor(ys[i]/h)
   for oy=-1,1 do for ox=-1,1 do local cell=grid[cx+ox+(cy+oy)*4096]
@@ -5018,7 +5018,7 @@ local function fullSim(g)
   local x=g.gap+3.3+(row%2)*d/2
   while x<g.gap+g.cw-2 do
    if sdRound(x,y,g.gap,g.cy-g.ch/2,g.gap+g.cw,g.cy+g.ch/2,g.rad)<-2.5 then
-    local i=#sim.xs+1;sim.xs[i]=x;sim.ys[i]=y;sim.vx[i]=-1.6*(1-(x-g.gap)/g.cw*.5);sim.vy[i]=(g.cy-y)*.02;sim.px[i]=x;sim.py[i]=y end
+    local i=#sim.xs+1;sim.xs[i]=x;sim.ys[i]=y;sim.vx[i]=0;sim.vy[i]=0;sim.px[i]=x;sim.py[i]=y end
    x+=d
   end
   y+=d*.866;row+=1
@@ -5119,7 +5119,7 @@ ch.Event:Connect(function(tag,fid,ox,oy,w,h,r,dir,ex,g,cardScale,pos,n,mat)
      local shine=exp(-dd*.8)*(.18+.82*light)*.8+exp(-dd*.13)*.22*light;if shine>1 then shine=1 end
      local edge=min(min(x,W-1-x),min(y,H-1-y));if edge<22 then alpha*=edge/22 end
      -- inside the window the window itself shows: the liquid starts at its edge
-     local inside=sdRR(ox+x+.5,oy+y+.5,0,0,w,h,r);if inside<.5 then alpha*=clamp(inside+.5,0,1) end
+     local inside=sdRR(ox+x+.5,oy+y+.5,0,0,w,h,r);if inside<2.5 then alpha*=clamp(inside-1.5,0,1) end
      local base=readu32(mat,(y*W+x)*4)
      local br,bg,bb=base%256,floor(base/256)%256,floor(base/65536)%256
      writeu32(out,(orow+x)*4,floor(br+(RIM_R-br)*shine+.5)+floor(bg+(RIM_G-bg)*shine+.5)*256+floor(bb+(RIM_B-bb)*shine+.5)*65536+floor(alpha*255+.5)*16777216)
@@ -5184,13 +5184,23 @@ ch:Fire('ready')
    local simId,simCh=make();local drawId,drawCh=make()
    simChannel,drawChannel=simCh,drawCh
    track(simCh.Event:Connect(onSim));track(drawCh.Event:Connect(onDraw))
-   local actors={}
-   for i=1,3 do
-    local actor=track(Instance.new('Actor'));actor.Name='MercuryLiquidWorker'..i;actor.Parent=holder
-    local idle=Instance.new('LocalScript');idle.Name='Idle';idle.Parent=actor   -- an empty script wakes the actor up
-    actors[i]=actor
+   -- Each actor needs a running script to wake up; an empty LocalScript does it
+   -- (the engine logs one line per actor for its empty body). The pool is kept for
+   -- the whole game session and reused by every window, so that happens once.
+   local reg=typeof(executorEnv.getgenv)=='function' and executorEnv.getgenv() or _G
+   local actors=reg.__MercuryLiquidWorkers
+   local alive=type(actors)=='table' and #actors==3
+   if alive then for i=1,3 do if typeof(actors[i])~='Instance' or not actors[i]:IsDescendantOf(game) then alive=false end end end
+   if not alive then
+    actors={}
+    for i=1,3 do
+     local actor=Instance.new('Actor');actor.Name='MercuryLiquidWorker'..i;actor.Parent=holder
+     local idle=Instance.new('LocalScript');idle.Name='Idle';idle.Parent=actor
+     actors[i]=actor
+    end
+    reg.__MercuryLiquidWorkers=actors
+    task.wait(.3)
    end
-   task.wait(.3)
    run(actors[1],SIM_SRC,simId)
    run(actors[2],RENDER_SRC,drawId,1,2,W_,H_)
    run(actors[3],RENDER_SRC,drawId,2,2,W_,H_)
