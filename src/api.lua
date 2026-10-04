@@ -670,10 +670,10 @@ function window:CreateTab(name, icon)
         for index, spec in GLOW do
             local copy = create("TextLabel", {Name = "TitleGlow" .. index, BackgroundTransparency = 1,
                 Position = heading.Position, Size = heading.Size, FontFace = heading.FontFace,
-                Text = heading.Text, TextSize = heading.TextSize, TextColor3 = Theme.lilac,
+                Text = heading.Text, TextSize = heading.TextSize, TextColor3 = Theme.spec,
                 TextTransparency = 0.6, TextXAlignment = heading.TextXAlignment,
                 TextYAlignment = heading.TextYAlignment, ZIndex = 0, Parent = holder})
-            local stroke = create("UIStroke", {Color = Theme.lilac, Thickness = spec[1], Transparency = spec[2],
+            local stroke = create("UIStroke", {Color = Theme.spec, Thickness = spec[1], Transparency = spec[2],
                 LineJoinMode = Enum.LineJoinMode.Round, Parent = copy})
             table.insert(glowLayers, {stroke = stroke, base = spec[2]})
         end
