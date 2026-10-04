@@ -663,22 +663,14 @@ function window:CreateTab(name, icon)
         end
         heading:GetPropertyChangedSignal("TextBounds"):Connect(placeRule)
         placeRule()
-        -- Glyph glow: copies of the title text stacked behind it, each with a round
-        -- lilac stroke a little wider and fainter than the last. The strokes follow
-        -- the letter shapes, so the glow hugs each glyph like a soft shadow, and the
-        -- overlapping layers give a smooth falloff away from the letters.
+        -- Soft drop shadow: one faint dark copy of the title 1px below it, so the
+        -- letters lift slightly off the glass. (Nothing spills past the glyphs.)
         local glowLayers = {}
-        local GLOW = {{0.5, 0.82}, {1.1, 0.92}} -- thickness px (fractions render anti-aliased), transparency
-        for index, spec in GLOW do
-            local copy = create("TextLabel", {Name = "TitleGlow" .. index, BackgroundTransparency = 1,
-                Position = heading.Position, Size = heading.Size, FontFace = heading.FontFace,
-                Text = heading.Text, TextSize = heading.TextSize, TextColor3 = Theme.spec,
-                TextTransparency = 0.6, TextXAlignment = heading.TextXAlignment,
-                TextYAlignment = heading.TextYAlignment, ZIndex = 0, Parent = holder})
-            local stroke = create("UIStroke", {Color = Theme.spec, Thickness = spec[1], Transparency = spec[2],
-                LineJoinMode = Enum.LineJoinMode.Round, Parent = copy})
-            table.insert(glowLayers, {stroke = stroke, base = spec[2]})
-        end
+        create("TextLabel", {Name = "TitleShadow", BackgroundTransparency = 1,
+            Position = heading.Position + UDim2.fromOffset(0, 1), Size = heading.Size, FontFace = heading.FontFace,
+            Text = heading.Text, TextSize = heading.TextSize, TextColor3 = Color3.new(0, 0, 0),
+            TextTransparency = 0.45, TextXAlignment = heading.TextXAlignment,
+            TextYAlignment = heading.TextYAlignment, ZIndex = 0, Parent = holder})
         -- The rule is the right half of the regular divider: same layer count, taper,
         -- per-layer fade and colour (read from Divider), bright at the title, thinning out.
         local LEAD = 0
