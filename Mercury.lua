@@ -3286,6 +3286,12 @@ for x=0,2047 do write(interiorRamp,x*4,baseColors[floor(x*.008*phaseScale)%4096]
 local rimBase,rimWide,broadLookup={},{},{}
 for i=0,2048 do rimBase[i]=math.exp(-i/32*.8);rimWide[i]=math.exp(-math.max(0,i/32-1)*.8);broadLookup[i]=math.exp(-i/32*.13)*.22 end
 local rimLookup=rimWide
+-- rim tables from the window's own (rimBase, extra=0) to the bubble's 1 px wider
+-- one (extra=1): the minimize morph walks them with its progress, so the panel turns
+-- into liquid with exactly the window's border and widens only as it becomes the bubble
+local rimByProgress={}
+for step=0,8 do local extra=step/8;local t={};for i=0,2048 do t[i]=math.exp(-math.max(0,i/32-extra)*.8) end;rimByProgress[step]=t end
+rimByProgress[0]=rimBase;rimByProgress[8]=rimWide
 for t=0,31 do for light=0,127 do
  local tint=t/31;local shine=light/127
  shades[t+light*32]=floor(27+11*tint+shine*195)+floor(23+7*tint+shine*189)*256+min(255,floor(40+16*tint+shine*205))*65536
@@ -4041,6 +4047,7 @@ step=function(dt,paced)
   if state=='morph' and ((morph.dir==1 and flow.freshReady and os.clock()-flow.clickTime>=CONTENT_FADE_SECONDS)
    or (morph.dir==-1 and flow.revealed and not flow.hideIn)) then morph.t=min(1,morph.t+dt*speed/morph.pace) end
   local T=state=='bubble' and 1 or (morph.dir==1 and morph.t or 1-morph.t)
+  flow.rim=rimByProgress[math.clamp(math.round(T*8),0,8)]
   local g=ease(T);local mx=cx+(bx-cx)*g+morph.bend[1]*sin(pi*g)*.5;local my=cy+(by-cy)*g+morph.bend[2]*sin(pi*g)*.5
   local roundK=.85*ease(clamp(T/.3,0,1));local rx,ry=P.w*.5,P.h*.5
   for i,p in ipairs(rect) do local ti=clamp((T-morph.delay[i])/(1-morph.maxDelay),0,1);local e=ease(ti);local a=angles[i]+morph.swirl*sin(pi*e)
@@ -4073,7 +4080,7 @@ step=function(dt,paced)
    material.ox,material.oy=mx-P.w/2,my-P.h/2
    drops={}
    flow.shot=nil
-   pacing.task=coroutine.create(render);pacing.args={pts,drops};pacing.work=0
+   pacing.task=coroutine.create(render);pacing.args={pts,drops};pacing.work=0;pacing.rim=flow.rim
    pacing.onDone=function() showSurface();finish(true) end
    return
   end
@@ -4086,9 +4093,9 @@ step=function(dt,paced)
   flow.shot={x0,y0,x1,y1,flow.shotTime,os.clock()}
  end
  if paced then
-  pacing.task=coroutine.create(render);pacing.args={pts,drops};pacing.work=0
+  pacing.task=coroutine.create(render);pacing.args={pts,drops};pacing.work=0;pacing.rim=flow.rim
  else
-  local started=os.clock();render(pts,drops);local ms=(os.clock()-started)*1000
+  local started=os.clock();local savedRim=rimLookup;rimLookup=flow.rim or rimWide;render(pts,drops);rimLookup=savedRim;local ms=(os.clock()-started)*1000
   count+=1;totalMs+=ms;maximumMs=max(maximumMs,ms)
  end
 end
@@ -4100,7 +4107,9 @@ resumeRender=function()
  -- busy, so the liquid takes over as soon as possible
  if state=='morph' and not flow.revealed and morph and morph.dir==1 then pacing.budget=max(pacing.budget,PERF.morph) end
  local ok,err
+ local savedRim=rimLookup;rimLookup=pacing.rim or rimWide
  if pacing.args then local args=pacing.args;pacing.args=nil;ok,err=coroutine.resume(task,args[1],args[2]) else ok,err=coroutine.resume(task) end
+ rimLookup=savedRim
  local sliceStart=pacing.start
  pacing.budget=nil;pacing.work+=os.clock()-max(sliceStart,pacing.resumedAt or sliceStart)
  if not ok then pacing.task=nil;error(err,0) end
@@ -5118,7 +5127,13 @@ do
      -- window: centred between the edge point and the droplet
      -- snapped to the mask grid (S px), so the panel edge inside the window is
      -- rasterised identically wherever the window sits (no 1 px edge jitter)
-     local ox,oy=floor(((ex+cx0)/2-WINDOW/2)/S)*S,floor(((ey+cy0)/2-WINDOW/2)/S)*S
+     -- The window is anchored to the edge point, pushed out along the edge normal by a
+     -- fixed amount: it slides along the edge but never moves toward or away from it.
+     -- (Following the droplet, the snapped origin stepped 2 px across the edge, and for
+     -- the one frame where the label had moved but its new picture wasn't up yet, the
+     -- window's slice of the panel edge showed 2 px off: a slab or a bite in the border.)
+     local reach=WINDOW/2-50
+     local ox,oy=floor((ex+nx*reach-WINDOW/2)/S)*S,floor((ey+ny*reach-WINDOW/2)/S)*S
      local x0,y0,x1,y1=ex,ey,ex,ey
      for _,b in ipairs(bodies) do x0=min(x0,b[1]-b[3]);y0=min(y0,b[2]-b[3]);x1=max(x1,b[1]+b[3]);y1=max(y1,b[2]+b[3]) end
      x0,y0=max(0,floor(x0-ox-MARGIN)),max(0,floor(y0-oy-MARGIN));x1,y1=min(WINDOW,ceil(x1-ox+MARGIN)),min(WINDOW,ceil(y1-oy+MARGIN))
