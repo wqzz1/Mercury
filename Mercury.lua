@@ -82,7 +82,7 @@ local Layout = {
 local Divider = {
     layers = 14,
     minWidth = 0.14,        -- innermost layer width (fraction of full)
-    maxThickness = 3,       -- px at the centre
+    maxThickness = 2,       -- px at the centre
     centreOpacity = 0.72,   -- combined opacity at the middle
 }
 
@@ -443,19 +443,15 @@ local function softGlow(parent: Instance, color: Color3, layers: number, spread:
 end
 
 -- Thin, fading ends; thicker, solid centre. Uses the rim colour.
--- Every layer is laid out in whole pixels around one shared centre point:
--- even widths, odd heights (1 or 3 px), offsets computed explicitly. Nothing
--- relies on 0.5 anchors snapping, so the bright core sits dead centre.
+-- The holder and its layers follow the parent's width, keeping the divider
+-- inside the window when the user resizes it.
 local function taperedDivider(parent: Instance, centerY: number): Frame
-    local fullWidth = Layout.width - Layout.padX * 2
     local boxHeight = Divider.maxThickness
     local holder = create("Frame", {
         Name = "Divider",
         BackgroundTransparency = 1,
-        -- centred on the parent, so it stays centred when the panel is resized
-        -- (panel widths are kept even, so this stays on whole pixels)
-        Position = UDim2.new(0.5, -fullWidth // 2, 0, math.round(centerY - boxHeight / 2)),
-        Size = UDim2.fromOffset(fullWidth, boxHeight),
+        Position = UDim2.new(0, Layout.padX, 0, math.round(centerY - boxHeight / 2)),
+        Size = UDim2.new(1, -Layout.padX * 2, 0, boxHeight),
         ZIndex = 2,
         Parent = parent,
     })
@@ -476,13 +472,14 @@ local function taperedDivider(parent: Instance, centerY: number): Frame
 
     for index = 1, Divider.layers do
         local t = (index - 1) / (Divider.layers - 1)
-        local width = 2 * math.round(fullWidth * (1 - t * (1 - Divider.minWidth)) / 2)
+        local widthFraction = 1 - t * (1 - Divider.minWidth)
         local height = if t < 0.5 then 1 else boxHeight
         local line = create("Frame", {
             BackgroundColor3 = Theme.spec,
             BorderSizePixel = 0,
-            Position = UDim2.fromOffset((fullWidth - width) // 2, (boxHeight - height) // 2),
-            Size = UDim2.fromOffset(width, height),
+            AnchorPoint = Vector2.new(0.5, 0),
+            Position = UDim2.new(0.5, 0, 0, (boxHeight - height) // 2),
+            Size = UDim2.new(widthFraction, 0, 0, height),
             ZIndex = 2,
             Parent = holder,
         })
@@ -1410,8 +1407,8 @@ create("TextLabel", {
 
 -- Icon + label live in a centred horizontal list, and the pill sizes itself
 -- to that content with equal padding, so the group is always centred.
-local contactButton: TextButton = create("TextButton", {
-    Name = "Contact",
+local biolinkButton: TextButton = create("TextButton", {
+    Name = "Biolink",
     Text = "",
     AutoButtonColor = false,
     BorderSizePixel = 0,
@@ -1424,13 +1421,13 @@ local contactButton: TextButton = create("TextButton", {
     ZIndex = 3,
     Parent = panel,
 })
-corner(contactButton, UDim.new(0.5, 0))
-specularRim(contactButton)
-attachHoverScale(contactButton)
+corner(biolinkButton, UDim.new(0.5, 0))
+specularRim(biolinkButton)
+attachHoverScale(biolinkButton)
 create("UIPadding", {
     PaddingLeft = UDim.new(0, 14),
     PaddingRight = UDim.new(0, 14),
-    Parent = contactButton,
+    Parent = biolinkButton,
 })
 create("UIListLayout", {
     FillDirection = Enum.FillDirection.Horizontal,
@@ -1438,7 +1435,7 @@ create("UIListLayout", {
     VerticalAlignment = Enum.VerticalAlignment.Center,
     SortOrder = Enum.SortOrder.LayoutOrder,
     Padding = UDim.new(0, 7),
-    Parent = contactButton,
+    Parent = biolinkButton,
 })
 
 local globeAsset = loadEmbeddedImage("lucide-globe.png", EmbeddedPng.globe)
@@ -1452,7 +1449,7 @@ if globeAsset then
         ImageColor3 = Theme.mist,
         ScaleType = Enum.ScaleType.Fit,
         ZIndex = 4,
-        Parent = contactButton,
+        Parent = biolinkButton,
     })
 else
     -- No custom-asset support: rebuild the Lucide globe from primitives.
@@ -1462,7 +1459,7 @@ else
         BackgroundTransparency = 1,
         Size = UDim2.fromOffset(14, 14),
         ZIndex = 4,
-        Parent = contactButton,
+        Parent = biolinkButton,
     })
     local function globeStroke(size: UDim2)
         local outline = create("Frame", {
@@ -1495,14 +1492,14 @@ create("TextLabel", {
     AutomaticSize = Enum.AutomaticSize.X,
     Size = UDim2.fromOffset(0, 16),
     FontFace = font(Enum.FontWeight.SemiBold),
-    Text = options.FooterButtonText or "Contact",
+    Text = options.FooterButtonText or "Biolink",
     TextSize = 12,
     TextColor3 = Theme.mist,
     ZIndex = 4,
-    Parent = contactButton,
+    Parent = biolinkButton,
 })
 
--- Contact toast --------------------------------------------------------------
+-- Notification toast ---------------------------------------------------------
 local TOAST_SIZE = Vector2.new(190, 58)
 
 local toast: Frame = create("Frame", {
@@ -3562,20 +3559,46 @@ local function resetFlow()
  flow.a=nil;flow.b=nil;flow.lead=0;flow.fadeLen=0;flow.fading=true
  if shownTiles then warp(0);blend(0) end
 end
+local CONTENT_FADE_SECONDS=.45
 local instantFinish=false
+local contentFadingIn=false
+local function runPending()
+ if pending~=nil then local value=pending;pending=nil;task.defer(function() if not stopped then Resize.setMinimized(value) end end) end
+end
 local function finish(minimized)
- state=minimized and 'bubble' or 'panel';Resize.animating=false
+ state=minimized and 'bubble' or 'panel'
+ Resize.animating=not minimized and not instantFinish
  resetFlow();flow.hideIn=nil;flow.handoff=nil;material.sheetTask=nil
- applyFade(panelEntries,1);restoreBackgrounds()
+ applyFade(panelEntries,if minimized or instantFinish then 1 else 0);restoreBackgrounds()
  root.Visible=not minimized;bubble.Visible=minimized;applyFade(iconEntries,1)
  if minimized then
   idle={};nextIdle=clock+.6;prepareIdle();canvas.Visible=true
   if instantFinish then step(0);showSurface() else step(0,true);pacing.onDone=showSurface end
- else canvas.Visible=false end
- if pending~=nil then local value=pending;pending=nil;task.defer(function() if not stopped then Resize.setMinimized(value) end end) end
+  runPending()
+ else
+  canvas.Visible=false
+  if instantFinish then
+   runPending()
+  else
+   contentFadingIn=true
+   local began=os.clock()
+   local connection: RBXScriptConnection?
+   connection=RunService.RenderStepped:Connect(function()
+    if stopped then if connection then connection:Disconnect() end;return end
+    local alpha=clamp((os.clock()-began)/CONTENT_FADE_SECONDS,0,1)
+    applyFade(panelEntries,alpha)
+    if alpha>=1 then
+     if connection then connection:Disconnect() end
+     contentFadingIn=false;Resize.animating=false
+     runPending()
+    end
+   end)
+   track(connection)
+  end
+ end
 end
 function api.start(minimized,instant)
- if state=='morph' then pending=minimized;return end
+ if state=='morph' or contentFadingIn then pending=minimized;return end
  if instant or PERF.instant then
   if minimized then preparePanel();morph=newMorph(1);morph.t=1;hideBubbleBody();iconEntries=snapshot(iconHolder) end
   instantFinish=true;finish(minimized);instantFinish=false;return
@@ -3600,7 +3623,8 @@ function api.start(minimized,instant)
  -- one jump (the panel seemed to start, stop, then go on). So the shape clock
  -- starts when the liquid is actually on screen: the first picture is the panel
  -- exactly as it is (T=0), and the motion begins from rest the moment it shows.
- -- The content fade still runs from the click, on its own clock.
+ -- The contents fade from the click while the first liquid picture holds still.
+ -- The shape starts moving only after that fade has finished.
  local started=os.clock()
  local fromReveal=minimized
  local lead=fromReveal and 0 or clamp(flow.firstLatency,.02,.07)
@@ -3633,7 +3657,7 @@ step=function(dt,paced)
  end
  local pts,drops={},{}
  local completed=nil
-  if state=='morph' then morph.t=min(1,morph.t+dt*speed/morph.pace) end
+  if state=='morph' and (morph.dir==-1 or os.clock()-flow.clickTime>=CONTENT_FADE_SECONDS) then morph.t=min(1,morph.t+dt*speed/morph.pace) end
   local T=state=='bubble' and 1 or (morph.dir==1 and morph.t or 1-morph.t)
   local g=ease(T);local mx=cx+(bx-cx)*g+morph.bend[1]*sin(pi*g)*.5;local my=cy+(by-cy)*g+morph.bend[2]*sin(pi*g)*.5
   local roundK=.85*ease(clamp(T/.3,0,1));local rx,ry=P.w*.5,P.h*.5
@@ -3764,10 +3788,15 @@ track(RunService.RenderStepped:Connect(function(dt)
    elseif coroutine.status(sheetTask)=='dead' and material.sheetTask==sheetTask then material.sheetTask=nil end
   end
   if state~='bubble' then runSheet(.0015) end
+  -- Hold the first panel picture while its contents fade out; do not keep
+  -- rebuilding the same full-size liquid frame during this waiting stage.
+  local waitingForContent=state=='morph' and morph and morph.dir==1
+   and os.clock()-flow.clickTime<CONTENT_FADE_SECONDS
+  if waitingForContent then elapsed=0 end
   -- finish the update in flight before starting the next one
   if pacing.task then resumeRender()
    -- Keep the idle liquid border in step with the per-frame icon gradient.
-   elseif not flow.handoff and ((state=='bubble' and elapsed>=PERF.bubbleGap) or elapsed>=1/60) then
+   elseif not waitingForContent and not flow.handoff and ((state=='bubble' and elapsed>=PERF.bubbleGap) or elapsed>=1/60) then
    -- draw for when this picture will be on screen, not for now
    local lead=state=='morph' and min(.06,flow.latency) or 0
    local duration=elapsed+lead-flow.lead;elapsed=0;flow.lead=lead
@@ -3778,13 +3807,16 @@ track(RunService.RenderStepped:Connect(function(dt)
   if state=='bubble' then runSheet(clamp(sliceBudget(PERF.idle)-(os.clock()-pacing.frameStart),.0008,.0015)) end
   if state=='morph' or flow.warped then warp(os.clock()) end
   blend(os.clock())
-  -- Panel content and icon fade every frame from the morph clock: the time the
-  -- latest picture is drawn for (shotTime) minus how far ahead of now that is.
+  -- The panel contents fade out before minimize and in after restore. The
+  -- bubble icon still follows the morph clock.
   if state=='morph' and morph then
-   local vt=clamp(morph.t+(os.clock()-flow.shotTime)*speed/morph.pace,0,1)
+   local vt=if morph.dir==1 and os.clock()-flow.clickTime<CONTENT_FADE_SECONDS then 0
+    else clamp(morph.t+(os.clock()-flow.shotTime)*speed/morph.pace,0,1)
    local VT=morph.dir==1 and vt or 1-vt
-   -- minimize: the content fades from the click (the shape clock starts later)
-   local pa=morph.dir==1 and clamp(1-clamp((os.clock()-flow.clickTime)*speed/morph.pace,0,1)/.14,0,1) or clamp(1-VT/.14,0,1)
+   -- Minimize fades the contents before the shape moves. Restore fades in after it returns.
+   local pa=if morph.dir==1
+    then clamp(1-(os.clock()-flow.clickTime)/CONTENT_FADE_SECONDS,0,1)
+    else .001
    -- until the liquid is on screen the panel/bubble must stay (only its content fades)
    local ia=clamp((VT-.65)/.35,0,1)
    if not flow.revealed or flow.hideIn then if morph.dir==1 then pa=max(pa,.001) else ia=max(ia,.001) end end
@@ -5360,10 +5392,25 @@ function window:Unminimize() Resize.setMinimized(false) end
 function window:Close() close() end
 function window:Destroy() shutdown() end
 window.Unload = window.Destroy
-contactButton.Visible = options.FooterButtonText ~= nil
-if options.FooterButtonText then
-    track(contactButton.MouseButton1Click:Connect(function() safeCall(options.FooterButtonCallback) end))
-end
+biolinkButton.Visible = options.FooterButtonText ~= false
+track(biolinkButton.MouseButton1Click:Connect(function()
+    if typeof(options.FooterButtonCallback) == "function" then
+        safeCall(options.FooterButtonCallback)
+        return
+    end
+    local link = if typeof(options.FooterButtonUrl) == "string" and options.FooterButtonUrl ~= ""
+        then options.FooterButtonUrl else "https://alo.ne/egowho"
+    local opened = pcall(function()
+        (game:GetService("GuiService") :: any):OpenBrowserWindow(link)
+    end)
+    local setter = executorEnv.setclipboard or executorEnv.toclipboard
+    local copied = typeof(setter) == "function" and pcall(setter, link)
+    local title = if opened and copied then "Opening · link copied"
+        elseif opened then "Opening in browser"
+        elseif copied then "Link copied"
+        else "Copy not supported"
+    showToast(title, link:gsub("^https://", ""), 2.4)
+end))
 track(header.InputBegan:Connect(beginDrag))
 track(UserInputService.InputChanged:Connect(updateDrag))
 track(UserInputService.InputEnded:Connect(endDrag))

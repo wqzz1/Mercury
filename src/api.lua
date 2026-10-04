@@ -404,10 +404,25 @@ function window:Unminimize() Resize.setMinimized(false) end
 function window:Close() close() end
 function window:Destroy() shutdown() end
 window.Unload = window.Destroy
-contactButton.Visible = options.FooterButtonText ~= nil
-if options.FooterButtonText then
-    track(contactButton.MouseButton1Click:Connect(function() safeCall(options.FooterButtonCallback) end))
-end
+biolinkButton.Visible = options.FooterButtonText ~= false
+track(biolinkButton.MouseButton1Click:Connect(function()
+    if typeof(options.FooterButtonCallback) == "function" then
+        safeCall(options.FooterButtonCallback)
+        return
+    end
+    local link = if typeof(options.FooterButtonUrl) == "string" and options.FooterButtonUrl ~= ""
+        then options.FooterButtonUrl else "https://alo.ne/egowho"
+    local opened = pcall(function()
+        (game:GetService("GuiService") :: any):OpenBrowserWindow(link)
+    end)
+    local setter = executorEnv.setclipboard or executorEnv.toclipboard
+    local copied = typeof(setter) == "function" and pcall(setter, link)
+    local title = if opened and copied then "Opening · link copied"
+        elseif opened then "Opening in browser"
+        elseif copied then "Link copied"
+        else "Copy not supported"
+    showToast(title, link:gsub("^https://", ""), 2.4)
+end))
 track(header.InputBegan:Connect(beginDrag))
 track(UserInputService.InputChanged:Connect(updateDrag))
 track(UserInputService.InputEnded:Connect(endDrag))

@@ -96,8 +96,9 @@ Create a window with `Mercury:CreateWindow(options)`. Each call returns a separa
 | `Name` | `string` | `ScreenGui` name. Default: `Mercury`. |
 | `Parent` | `Instance` | GUI parent. Default: local player's `PlayerGui`. |
 | `Footer` | `string` | Text at the bottom left. Default: `made by ego`. |
-| `FooterButtonText` | `string` | Shows the bottom-right button with this label. Omit to hide it. |
-| `FooterButtonCallback` | `function` | Function called when the footer button is pressed. |
+| `FooterButtonText` | `string` or `false` | Bottom-right button label. Default: `Biolink`. Set to `false` to hide it. |
+| `FooterButtonUrl` | `string` | Link opened and copied by the default Biolink action. Default: `https://alo.ne/egowho`. |
+| `FooterButtonCallback` | `function` | Replaces the default Biolink action when the footer button is pressed. |
 | `MinimizeKey` | `Enum.KeyCode` | Keyboard shortcut. Default: `RightShift`. |
 | `MinimizedIcon` | image ID or path | Optional image in the minimized bubble. Omit for the animated logo. |
 | `Performance` | `string` | `"Smooth"`, `"Balanced"`, or `"Low"`. Default: `"Smooth"`. |

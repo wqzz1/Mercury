@@ -53,7 +53,7 @@ local Layout = {
 local Divider = {
     layers = 14,
     minWidth = 0.14,        -- innermost layer width (fraction of full)
-    maxThickness = 3,       -- px at the centre
+    maxThickness = 2,       -- px at the centre
     centreOpacity = 0.72,   -- combined opacity at the middle
 }
 

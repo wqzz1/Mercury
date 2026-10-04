@@ -507,8 +507,8 @@ create("TextLabel", {
 
 -- Icon + label live in a centred horizontal list, and the pill sizes itself
 -- to that content with equal padding, so the group is always centred.
-local contactButton: TextButton = create("TextButton", {
-    Name = "Contact",
+local biolinkButton: TextButton = create("TextButton", {
+    Name = "Biolink",
     Text = "",
     AutoButtonColor = false,
     BorderSizePixel = 0,
@@ -521,13 +521,13 @@ local contactButton: TextButton = create("TextButton", {
     ZIndex = 3,
     Parent = panel,
 })
-corner(contactButton, UDim.new(0.5, 0))
-specularRim(contactButton)
-attachHoverScale(contactButton)
+corner(biolinkButton, UDim.new(0.5, 0))
+specularRim(biolinkButton)
+attachHoverScale(biolinkButton)
 create("UIPadding", {
     PaddingLeft = UDim.new(0, 14),
     PaddingRight = UDim.new(0, 14),
-    Parent = contactButton,
+    Parent = biolinkButton,
 })
 create("UIListLayout", {
     FillDirection = Enum.FillDirection.Horizontal,
@@ -535,7 +535,7 @@ create("UIListLayout", {
     VerticalAlignment = Enum.VerticalAlignment.Center,
     SortOrder = Enum.SortOrder.LayoutOrder,
     Padding = UDim.new(0, 7),
-    Parent = contactButton,
+    Parent = biolinkButton,
 })
 
 local globeAsset = loadEmbeddedImage("lucide-globe.png", EmbeddedPng.globe)
@@ -549,7 +549,7 @@ if globeAsset then
         ImageColor3 = Theme.mist,
         ScaleType = Enum.ScaleType.Fit,
         ZIndex = 4,
-        Parent = contactButton,
+        Parent = biolinkButton,
     })
 else
     -- No custom-asset support: rebuild the Lucide globe from primitives.
@@ -559,7 +559,7 @@ else
         BackgroundTransparency = 1,
         Size = UDim2.fromOffset(14, 14),
         ZIndex = 4,
-        Parent = contactButton,
+        Parent = biolinkButton,
     })
     local function globeStroke(size: UDim2)
         local outline = create("Frame", {
@@ -592,14 +592,14 @@ create("TextLabel", {
     AutomaticSize = Enum.AutomaticSize.X,
     Size = UDim2.fromOffset(0, 16),
     FontFace = font(Enum.FontWeight.SemiBold),
-    Text = options.FooterButtonText or "Contact",
+    Text = options.FooterButtonText or "Biolink",
     TextSize = 12,
     TextColor3 = Theme.mist,
     ZIndex = 4,
-    Parent = contactButton,
+    Parent = biolinkButton,
 })
 
--- Contact toast --------------------------------------------------------------
+-- Notification toast ---------------------------------------------------------
 local TOAST_SIZE = Vector2.new(190, 58)
 
 local toast: Frame = create("Frame", {

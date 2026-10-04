@@ -1775,20 +1775,46 @@ local function resetFlow()
  flow.a=nil;flow.b=nil;flow.lead=0;flow.fadeLen=0;flow.fading=true
  if shownTiles then warp(0);blend(0) end
 end
+local CONTENT_FADE_SECONDS=.45
 local instantFinish=false
+local contentFadingIn=false
+local function runPending()
+ if pending~=nil then local value=pending;pending=nil;task.defer(function() if not stopped then Resize.setMinimized(value) end end) end
+end
 local function finish(minimized)
- state=minimized and 'bubble' or 'panel';Resize.animating=false
+ state=minimized and 'bubble' or 'panel'
+ Resize.animating=not minimized and not instantFinish
  resetFlow();flow.hideIn=nil;flow.handoff=nil;material.sheetTask=nil
- applyFade(panelEntries,1);restoreBackgrounds()
+ applyFade(panelEntries,if minimized or instantFinish then 1 else 0);restoreBackgrounds()
  root.Visible=not minimized;bubble.Visible=minimized;applyFade(iconEntries,1)
  if minimized then
   idle={};nextIdle=clock+.6;prepareIdle();canvas.Visible=true
   if instantFinish then step(0);showSurface() else step(0,true);pacing.onDone=showSurface end
- else canvas.Visible=false end
- if pending~=nil then local value=pending;pending=nil;task.defer(function() if not stopped then Resize.setMinimized(value) end end) end
+  runPending()
+ else
+  canvas.Visible=false
+  if instantFinish then
+   runPending()
+  else
+   contentFadingIn=true
+   local began=os.clock()
+   local connection: RBXScriptConnection?
+   connection=RunService.RenderStepped:Connect(function()
+    if stopped then if connection then connection:Disconnect() end;return end
+    local alpha=clamp((os.clock()-began)/CONTENT_FADE_SECONDS,0,1)
+    applyFade(panelEntries,alpha)
+    if alpha>=1 then
+     if connection then connection:Disconnect() end
+     contentFadingIn=false;Resize.animating=false
+     runPending()
+    end
+   end)
+   track(connection)
+  end
+ end
 end
 function api.start(minimized,instant)
- if state=='morph' then pending=minimized;return end
+ if state=='morph' or contentFadingIn then pending=minimized;return end
  if instant or PERF.instant then
   if minimized then preparePanel();morph=newMorph(1);morph.t=1;hideBubbleBody();iconEntries=snapshot(iconHolder) end
   instantFinish=true;finish(minimized);instantFinish=false;return
@@ -1813,7 +1839,8 @@ function api.start(minimized,instant)
  -- one jump (the panel seemed to start, stop, then go on). So the shape clock
  -- starts when the liquid is actually on screen: the first picture is the panel
  -- exactly as it is (T=0), and the motion begins from rest the moment it shows.
- -- The content fade still runs from the click, on its own clock.
+ -- The contents fade from the click while the first liquid picture holds still.
+ -- The shape starts moving only after that fade has finished.
  local started=os.clock()
  local fromReveal=minimized
  local lead=fromReveal and 0 or clamp(flow.firstLatency,.02,.07)
@@ -1846,7 +1873,7 @@ step=function(dt,paced)
  end
  local pts,drops={},{}
  local completed=nil
-  if state=='morph' then morph.t=min(1,morph.t+dt*speed/morph.pace) end
+  if state=='morph' and (morph.dir==-1 or os.clock()-flow.clickTime>=CONTENT_FADE_SECONDS) then morph.t=min(1,morph.t+dt*speed/morph.pace) end
   local T=state=='bubble' and 1 or (morph.dir==1 and morph.t or 1-morph.t)
   local g=ease(T);local mx=cx+(bx-cx)*g+morph.bend[1]*sin(pi*g)*.5;local my=cy+(by-cy)*g+morph.bend[2]*sin(pi*g)*.5
   local roundK=.85*ease(clamp(T/.3,0,1));local rx,ry=P.w*.5,P.h*.5
@@ -1977,10 +2004,15 @@ track(RunService.RenderStepped:Connect(function(dt)
    elseif coroutine.status(sheetTask)=='dead' and material.sheetTask==sheetTask then material.sheetTask=nil end
   end
   if state~='bubble' then runSheet(.0015) end
+  -- Hold the first panel picture while its contents fade out; do not keep
+  -- rebuilding the same full-size liquid frame during this waiting stage.
+  local waitingForContent=state=='morph' and morph and morph.dir==1
+   and os.clock()-flow.clickTime<CONTENT_FADE_SECONDS
+  if waitingForContent then elapsed=0 end
   -- finish the update in flight before starting the next one
   if pacing.task then resumeRender()
    -- Keep the idle liquid border in step with the per-frame icon gradient.
-   elseif not flow.handoff and ((state=='bubble' and elapsed>=PERF.bubbleGap) or elapsed>=1/60) then
+   elseif not waitingForContent and not flow.handoff and ((state=='bubble' and elapsed>=PERF.bubbleGap) or elapsed>=1/60) then
    -- draw for when this picture will be on screen, not for now
    local lead=state=='morph' and min(.06,flow.latency) or 0
    local duration=elapsed+lead-flow.lead;elapsed=0;flow.lead=lead
@@ -1991,13 +2023,16 @@ track(RunService.RenderStepped:Connect(function(dt)
   if state=='bubble' then runSheet(clamp(sliceBudget(PERF.idle)-(os.clock()-pacing.frameStart),.0008,.0015)) end
   if state=='morph' or flow.warped then warp(os.clock()) end
   blend(os.clock())
-  -- Panel content and icon fade every frame from the morph clock: the time the
-  -- latest picture is drawn for (shotTime) minus how far ahead of now that is.
+  -- The panel contents fade out before minimize and in after restore. The
+  -- bubble icon still follows the morph clock.
   if state=='morph' and morph then
-   local vt=clamp(morph.t+(os.clock()-flow.shotTime)*speed/morph.pace,0,1)
+   local vt=if morph.dir==1 and os.clock()-flow.clickTime<CONTENT_FADE_SECONDS then 0
+    else clamp(morph.t+(os.clock()-flow.shotTime)*speed/morph.pace,0,1)
    local VT=morph.dir==1 and vt or 1-vt
-   -- minimize: the content fades from the click (the shape clock starts later)
-   local pa=morph.dir==1 and clamp(1-clamp((os.clock()-flow.clickTime)*speed/morph.pace,0,1)/.14,0,1) or clamp(1-VT/.14,0,1)
+   -- Minimize fades the contents before the shape moves. Restore fades in after it returns.
+   local pa=if morph.dir==1
+    then clamp(1-(os.clock()-flow.clickTime)/CONTENT_FADE_SECONDS,0,1)
+    else .001
    -- until the liquid is on screen the panel/bubble must stay (only its content fades)
    local ia=clamp((VT-.65)/.35,0,1)
    if not flow.revealed or flow.hideIn then if morph.dir==1 then pa=max(pa,.001) else ia=max(ia,.001) end end

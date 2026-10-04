@@ -299,19 +299,15 @@ local function softGlow(parent: Instance, color: Color3, layers: number, spread:
 end
 
 -- Thin, fading ends; thicker, solid centre. Uses the rim colour.
--- Every layer is laid out in whole pixels around one shared centre point:
--- even widths, odd heights (1 or 3 px), offsets computed explicitly. Nothing
--- relies on 0.5 anchors snapping, so the bright core sits dead centre.
+-- The holder and its layers follow the parent's width, keeping the divider
+-- inside the window when the user resizes it.
 local function taperedDivider(parent: Instance, centerY: number): Frame
-    local fullWidth = Layout.width - Layout.padX * 2
     local boxHeight = Divider.maxThickness
     local holder = create("Frame", {
         Name = "Divider",
         BackgroundTransparency = 1,
-        -- centred on the parent, so it stays centred when the panel is resized
-        -- (panel widths are kept even, so this stays on whole pixels)
-        Position = UDim2.new(0.5, -fullWidth // 2, 0, math.round(centerY - boxHeight / 2)),
-        Size = UDim2.fromOffset(fullWidth, boxHeight),
+        Position = UDim2.new(0, Layout.padX, 0, math.round(centerY - boxHeight / 2)),
+        Size = UDim2.new(1, -Layout.padX * 2, 0, boxHeight),
         ZIndex = 2,
         Parent = parent,
     })
@@ -332,13 +328,14 @@ local function taperedDivider(parent: Instance, centerY: number): Frame
 
     for index = 1, Divider.layers do
         local t = (index - 1) / (Divider.layers - 1)
-        local width = 2 * math.round(fullWidth * (1 - t * (1 - Divider.minWidth)) / 2)
+        local widthFraction = 1 - t * (1 - Divider.minWidth)
         local height = if t < 0.5 then 1 else boxHeight
         local line = create("Frame", {
             BackgroundColor3 = Theme.spec,
             BorderSizePixel = 0,
-            Position = UDim2.fromOffset((fullWidth - width) // 2, (boxHeight - height) // 2),
-            Size = UDim2.fromOffset(width, height),
+            AnchorPoint = Vector2.new(0.5, 0),
+            Position = UDim2.new(0.5, 0, 0, (boxHeight - height) // 2),
+            Size = UDim2.new(widthFraction, 0, 0, height),
             ZIndex = 2,
             Parent = holder,
         })
