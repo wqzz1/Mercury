@@ -5703,7 +5703,7 @@ function window:CreateTab(name, icon)
         -- the letter shapes, so the glow hugs each glyph like a soft shadow, and the
         -- overlapping layers give a smooth falloff away from the letters.
         local glowLayers = {}
-        local GLOW = {{1, 0.80}, {2, 0.88}, {3, 0.93}, {4.5, 0.965}}
+        local GLOW = {{0.5, 0.82}, {1.1, 0.92}} -- thickness px (fractions render anti-aliased), transparency
         for index, spec in GLOW do
             local copy = create("TextLabel", {Name = "TitleGlow" .. index, BackgroundTransparency = 1,
                 Position = heading.Position, Size = heading.Size, FontFace = heading.FontFace,
