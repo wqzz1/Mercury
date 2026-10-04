@@ -3030,8 +3030,11 @@ for x=0,OW-1 do phaseX[x]=floor(x*.008*phaseScale) end
 for y=0,OH-1 do phaseY[y]=floor(y*.006*phaseScale) end
 local interiorRamp=buffer.create(2048*4)
 for x=0,2047 do write(interiorRamp,x*4,baseColors[floor(x*.008*phaseScale)%4096]) end
-local rimLookup,broadLookup={},{}
-for i=0,2048 do rimLookup[i]=math.exp(-i/32*.8);broadLookup[i]=math.exp(-i/32*.13)*.22 end
+-- rimWide keeps the rim at full light for one extra px before it falls off, so
+-- liquid bubbles wear a rim 1px wider; rim-only overlays keep rimBase.
+local rimBase,rimWide,broadLookup={},{},{}
+for i=0,2048 do rimBase[i]=math.exp(-i/32*.8);rimWide[i]=math.exp(-math.max(0,i/32-1)*.8);broadLookup[i]=math.exp(-i/32*.13)*.22 end
+local rimLookup=rimWide
 for t=0,31 do for light=0,127 do
  local tint=t/31;local shine=light/127
  shades[t+light*32]=floor(27+11*tint+shine*195)+floor(23+7*tint+shine*189)*256+min(255,floor(40+16*tint+shine*205))*65536
@@ -3411,7 +3414,7 @@ do
  local spacing=(2*(panelSize.X+panelSize.Y)-(8-2*pi)*radius)/N
  local count=max(16,floor((4*P.w-(8-2*pi)*radius)/spacing+.5))
  local outline={};for i=1,count do outline[i]=rectPoint((i-1)/count) end
- rimMode=true;local ok,err=pcall(render,outline,{});rimMode=false
+ rimMode=true;rimLookup=rimBase;local ok,err=pcall(render,outline,{});rimMode=false;rimLookup=rimWide
  local function field(px,py)
   local gx,gy=px/S-.5,py/S-.5;local x0,y0=floor(gx),floor(gy);local fx,fy=gx-x0,gy-y0
   local i=y0*W+x0+1
@@ -3424,7 +3427,7 @@ do
    local o=contourOut
    P={x=margin+o,y=margin+o,w=side-2*margin-2*o,h=side-2*margin-2*o,r=max(1,radius-o)}
    for i=1,count do outline[i]=rectPoint((i-1)/count) end
-   rimMode=true;ok,err=pcall(render,outline,{});rimMode=false
+   rimMode=true;rimLookup=rimBase;ok,err=pcall(render,outline,{});rimMode=false;rimLookup=rimWide
   end
  end
  if ok then
@@ -3457,7 +3460,7 @@ do
   P={x=cardMargin+o,y=cardMargin+o,w=eside-2*cardMargin-2*o,h=eside-2*cardMargin-2*o,r=max(1,cardRadius-o)}
   local n=max(16,floor((4*P.w-(8-2*pi)*cardRadius)/spacing+.5))
   local cardOutline={};for i=1,n do cardOutline[i]=rectPoint((i-1)/n) end
-  rimMode=true;local cardOk=pcall(render,cardOutline,{});rimMode=false
+  rimMode=true;rimLookup=rimBase;local cardOk=pcall(render,cardOutline,{});rimMode=false;rimLookup=rimWide
   if cardOk then
    local image=game:GetService('AssetService'):CreateEditableImage({Size=Vector2.new(eside,eside)})
    -- the blurred edge rounds the corner more than the outline: measure the
