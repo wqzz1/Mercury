@@ -4869,8 +4869,10 @@ do
  local WW,WH=296,148
  local surface,label=nil,nil
  local m=nil
- local BUD,FILL,RETRACT,WOBBLE=.22,.62,.14,.4
- local SNAP=BUD+FILL*.8
+ -- bud, rush across, slosh/bounce off the far wall; total = time to settle
+ local BUD,RUSH,SLOSH,RETRACT=.2,.3,.78,.14
+ local TOTAL=BUD+RUSH+SLOSH
+ local SNAP=BUD+RUSH+.12   -- the neck snaps just after the head hits the far wall
  local function ensure()
   if surface then return end
   surface=newSurface(WW,WH)
@@ -4921,62 +4923,59 @@ do
    local br=4+10*e
    circles[1]={X(-4+(gap+6)*e)-ox,ey-oy,br}
   else
-   local u=min(1,(tau-BUD)/FILL)
-   if u<1 or not opening then
-    -- pour: liquid enters through the neck at mid-height and floods the card.
-    -- Its front is a moving wave (two travelling sines with per-notification
-    -- phases), runs ahead in the middle where the stream comes in, and the
-    -- liquid only reaches the top and bottom edges as it spreads.
-    local e=1-(1-u)^2.2
-    local reach=(cw+26*k)*e
-    local spread=.42+.58*(1-(1-min(1,u*1.5))^2)
-    local amp=9*k*sin(pi*min(1,u*1.05))
-    local ph=m.ph
-    local function front(yn)
-     local f=reach*(1-.32*yn*yn*(1-u))
-     f+=amp*(sin(2.3*pi*yn+ph[1]+tau*7.5)+.55*sin(4.1*pi*yn+ph[2]-tau*11))
-     local edge=clamp((spread-math.abs(yn))/.18,0,1)
-     return f*math.sqrt(edge)
+   -- Surge: a thick, rounded wave-head rushes across the card (accelerating),
+   -- slams into the far wall, throws splash beads past the far corners, then
+   -- bounces back off the wall and surges in again a few times, each bounce
+   -- smaller, with small ripples running over the surface, until it settles.
+   local tr=tau-BUD
+   local inner,outer=gap,gap+cw
+   local ph=m.ph
+   local frontAt
+   if tr<RUSH then
+    local u=tr/RUSH
+    local F=(cw+10*k)*u^1.45
+    local spread=.5+.5*(1-(1-u)^2)
+    local head=.5-.25*u            -- how rounded (bulbous) the head is
+    frontAt=function(yn)
+     local edge=clamp((spread-math.abs(yn))/.2,0,1)
+     return (F*(1-head*yn*yn)+1.8*k*sin(5*pi*yn+ph[1]+tau*16))*math.sqrt(edge)
     end
-    local inner,outer=gap,gap+cw
-    local right,left={},{}
-    local N=28
-    for i=0,N do
-     local yn=-1+2*i/N
-     local y=ey+yn*ch/2
-     -- the card's own rounded outline on this row
-     local dyc=max(0,math.abs(y-ey)-(ch/2-rad))
-     local inset=rad-sqrt(max(0,rad*rad-dyc*dyc))
-     local a=inner+inset;local bmax=outer-inset
-     local f=front(yn)
-     local bb=min(bmax,a+f)
-     if bb>a+.5 then right[#right+1]={X(bb)-ox,y-oy};left[#left+1]={X(a)-ox,y-oy} end
+   else
+    local ts=tr-RUSH
+    -- damped bounce: the head springs back off the far wall and surges in again
+    local back=cw*.34*math.exp(-3.4*ts)*(1-cos(13*ts))/2
+    local ripple=2.6*k*math.exp(-2.4*ts)
+    frontAt=function(yn)
+     return cw+12*k-back*(1+.35*yn*yn)+ripple*(sin(4.2*pi*yn+ph[1]-ts*15)+.6*sin(7*pi*yn+ph[2]+ts*21))
     end
-    if #right>=2 then
-     poly={}
-     for _,pt in ipairs(right) do poly[#poly+1]=pt end
-     for i=#left,1,-1 do poly[#poly+1]=left[i] end
-    end
-    -- splash beads riding just ahead of the wave, absorbed as it catches up
-    if u>.15 and u<.8 then
-     for j,sp in ipairs(m.splash) do
-      local yn=sp[1];local life=clamp((u-sp[2])/.25,0,1)
-      if life>0 and life<1 then
-       local s=gap+min(cw-6,front(yn)+(6+4*sp[3])*k*sin(pi*life))
-       circles[#circles+1]={X(s)-ox,ey+yn*ch/2*.8-oy,(2.5+1.5*sp[3])*k*sin(pi*life)}
-      end
+    -- splash: beads thrown past the far top/bottom corners on impact, pulled back in
+    if ts<.42 and opening then
+     local life=sin(pi*ts/.42)
+     for _,side in ipairs({-1,1}) do
+      circles[#circles+1]={X(outer-8*k-6*k*life)-ox,ey+side*(ch/2+4*k*life)-oy,(3+2.5*life)*k*life}
      end
     end
-    -- the bud bead melts into the incoming liquid
-    local fade=1-clamp(u/.3,0,1)
-    if fade>0 then circles[#circles+1]={X(gap+6)-ox,ey-oy,14*fade} end
-   else
-    -- full: the card rings like a filled water balloon, then settles
-    local t2=tau-BUD-FILL
-    local s=.09*math.exp(-6*t2)*sin(22*t2)
-    local ww,hh=cw*(1+s),ch*(1-s*.7)
-    poly={};rrect(X(gap+cw/2)-ox,ey-oy,ww,hh,rad,poly)
    end
+   local right,left={},{}
+   local N=28
+   for i=0,N do
+    local yn=-1+2*i/N
+    local y=ey+yn*ch/2
+    -- the card's own rounded outline on this row
+    local dyc=max(0,math.abs(y-ey)-(ch/2-rad))
+    local inset=rad-sqrt(max(0,rad*rad-dyc*dyc))
+    local a=inner+inset;local bmax=outer-inset
+    local bb=min(bmax,a+frontAt(yn))
+    if bb>a+.5 then right[#right+1]={X(bb)-ox,y-oy};left[#left+1]={X(a)-ox,y-oy} end
+   end
+   if #right>=2 then
+    poly={}
+    for _,pt in ipairs(right) do poly[#poly+1]=pt end
+    for i=#left,1,-1 do poly[#poly+1]=left[i] end
+   end
+   -- the bud bead melts into the incoming liquid
+   local fade=1-clamp(tr/(RUSH*.5),0,1)
+   if fade>0 then circles[#circles+1]={X(gap+6)-ox,ey-oy,14*fade} end
    -- neck between the panel edge and the card
    local ein=-4
    local cin=gap+4
@@ -5002,8 +5001,8 @@ do
  end
  local fadeToken=0
  toastMorph={
-  open=function(onRight,onDone) ensure();fadeToken+=1;label.ImageTransparency=0;m={opening=true,start=clock,onRight=onRight,onDone=onDone,ph={rand(0,2*pi),rand(0,2*pi)},splash={{rand(-.6,-.1),rand(.15,.35),rand(0,1)},{rand(.1,.6),rand(.3,.5),rand(0,1)}}} end,
-  close=function(onRight,onDone) ensure();fadeToken+=1;label.ImageTransparency=0;local old=m;m={opening=false,start=clock+.18,onRight=onRight,onDone=onDone,ph=old and old.ph or {rand(0,2*pi),rand(0,2*pi)},splash={}} end,
+  open=function(onRight,onDone) ensure();fadeToken+=1;label.ImageTransparency=0;m={opening=true,start=clock,onRight=onRight,onDone=onDone,ph={rand(0,2*pi),rand(0,2*pi)}} end,
+  close=function(onRight,onDone) ensure();fadeToken+=1;label.ImageTransparency=0;local old=m;m={opening=false,start=clock+.18,onRight=onRight,onDone=onDone,ph=old and old.ph or {rand(0,2*pi),rand(0,2*pi)}} end,
  }
  jobs[#jobs+1]={name='toast',interval=0,elapsed=0,
   active=function() return m~=nil and root.Visible end,
@@ -5017,18 +5016,18 @@ do
    local el=clock-m.start
    if m.opening then
     if m.hold then
-     if clock-(m.drawn or 0)>=.05 then m.drawn=clock;draw(BUD+FILL+WOBBLE,true,w,h,r) end
+     if clock-(m.drawn or 0)>=.05 then m.drawn=clock;draw(TOTAL,true,w,h,r) end
      return
     end
-    local tau=min(el,BUD+FILL+WOBBLE)
+    local tau=min(el,TOTAL)
     draw(tau,true,w,h,r)
-    if el>=BUD+FILL+WOBBLE then
+    if el>=TOTAL then
      m.hold=true;m.drawn=clock
      local cb=m.onDone;m.onDone=nil
      if cb then cb() end
     end
    else
-    local tau=min(BUD+FILL,BUD+FILL-el*1.15)
+    local tau=min(BUD+RUSH,BUD+RUSH-el*1.15)
     if tau<=0 then
      local cb=m.onDone;m=nil;label.Visible=false
      if cb then cb() end
