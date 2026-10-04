@@ -4,10 +4,10 @@ Mercury is a standalone Roblox Luau UI library with a liquid glass window, tabs,
 
 ## Quick start
 
-Put `Mercury.lua` in your executor workspace, then load it from your own script:
+Load the published library in your own client script:
 
 ```lua
-local Mercury = assert(loadstring(readfile("Mercury.lua"), "=Mercury"))()
+local Mercury = loadstring(game:HttpGet("https://raw.githubusercontent.com/wqzz1/Mercury/main/Mercury.lua"))()
 local window = Mercury:CreateWindow({Footer = "made by ego"})
 local main = window:CreateTab("Main", "home")
 main:CreateButton({Name = "Run", Callback = function() print("Run") end})

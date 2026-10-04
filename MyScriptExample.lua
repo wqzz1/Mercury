@@ -1,13 +1,12 @@
--- Save this as a separate file beside Mercury.lua in your executor workspace.
--- Run: loadstring(readfile("MyScriptExample.lua"), "=MyScriptExample")()
-local UI = assert(loadstring(readfile("Mercury.lua"), "=Mercury"))()
+-- Example script: add your own feature logic below the Mercury loader.
+local Mercury = loadstring(game:HttpGet("https://raw.githubusercontent.com/wqzz1/Mercury/main/Mercury.lua"))()
 
 local state = {
     enabled = false,
     amount = 25,
 }
 
-local window = UI:CreateWindow({
+local window = Mercury:CreateWindow({
     Name = "MyScriptUI",
     Footer = "made by ego",
     MinimizeKey = Enum.KeyCode.RightShift,

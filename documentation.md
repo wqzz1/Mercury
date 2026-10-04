@@ -16,38 +16,33 @@ Mercury is a single-file Roblox Luau UI library. It provides the liquid glass wi
 
 ## Requirements and setup
 
-The library runs on the Roblox **client**. It was tested with Potassium, where `loadstring` and `readfile` are available. Its liquid renderer uses Roblox `EditableImage`; embedded PNG assets use executor custom-asset functions when available. It does not save settings or run any game feature on its own.
+The library runs on the Roblox **client**. It was tested with Potassium, where `loadstring` and `game:HttpGet` are available. Its liquid renderer uses Roblox `EditableImage`; embedded PNG assets use executor custom-asset functions when available. It does not save settings or run any game feature on its own.
 
-1. Place [Mercury.lua](./Mercury.lua) in your executor workspace.
-2. Load it in your script:
+1. Load the published library in your script:
 
    ```lua
-   local UI = loadstring(readfile("Mercury.lua"), "=Mercury")()
+   local Mercury = loadstring(game:HttpGet("https://raw.githubusercontent.com/wqzz1/Mercury/main/Mercury.lua"))()
    ```
 
-3. Create a window and add tabs and controls. Loading the file alone does not display a window.
+2. Create a window and add tabs and controls. Loading the file alone does not display a window.
 
-If your loader already returns the library table, use that table directly. The examples below assume `UI` is the returned table.
+The examples below use `Mercury` for the returned library table.
 
-**Keep your script separate from the library file.** The `local UI = ...` line above is required; `Mercury.lua` returns a table but does not create a global named `UI`. The full example is available as [MyScriptExample.lua](./MyScriptExample.lua). Put both files in the same executor workspace, then run:
-
-```lua
-loadstring(readfile("MyScriptExample.lua"), "=MyScriptExample")()
-```
+**Keep your feature script separate from the library source.** The loader line above returns Mercury's library table; it does not create a global variable. See [MyScriptExample.lua](./MyScriptExample.lua) for a complete feature script.
 
 ## Your first script
 
 The example below adds your feature logic to Mercury. The Settings tab already exists and is reserved for UI settings. The header shows the current game's name.
 
 ```lua
-local UI = assert(loadstring(readfile("Mercury.lua"), "=Mercury"))()
+local Mercury = loadstring(game:HttpGet("https://raw.githubusercontent.com/wqzz1/Mercury/main/Mercury.lua"))()
 
 local state = {
     enabled = false,
     amount = 25,
 }
 
-local window = UI:CreateWindow({
+local window = Mercury:CreateWindow({
     Name = "MyScriptUI",
     Footer = "made by ego",
     MinimizeKey = Enum.KeyCode.RightShift,
@@ -96,7 +91,7 @@ return window
 
 ## Windows and tabs
 
-Create a window with `UI:CreateWindow(options)`. Each call returns a separate window object.
+Create a window with `Mercury:CreateWindow(options)`. Each call returns a separate window object.
 
 | Window option | Type | Purpose |
 | --- | --- | --- |
