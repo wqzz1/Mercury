@@ -3463,7 +3463,14 @@ conn=ch.Event:Connect(function(tag,fid,ox,oy,w,h,r,dir,ex,g,cardScale,pos,n,mat,
      local px=ox+x+.5
      if dir*(px-ex)>g.gap+.5 then
       local mid=ex+dir*(g.gap+g.cw/2)
-      local sc=sdRR(px,oy+y+.5,mid-g.cw/2,g.cy-g.ch/2,mid+g.cw/2,g.cy+g.ch/2,g.rad)
+      local sc
+      if dir*(px-ex)<g.gap+g.rad then
+       -- the corners on the window side: where the stream joins, only the card's
+       -- top/bottom lines bound it (its rounded corners would carve a notch into it)
+       sc=math.abs(oy+y+.5-g.cy)-g.ch/2
+      else
+       sc=sdRR(px,oy+y+.5,mid-g.cw/2,g.cy-g.ch/2,mid+g.cw/2,g.cy+g.ch/2,g.rad)
+      end
       if sc>-.5 then alpha*=clamp(.5-sc,0,1) end
      end
      if maskMode then
