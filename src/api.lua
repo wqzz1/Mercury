@@ -663,20 +663,26 @@ function window:CreateTab(name, icon)
         end
         heading:GetPropertyChangedSignal("TextBounds"):Connect(placeRule)
         placeRule()
-        -- Gradient shine + bottom light: the title is lit from above (bright at the
-        -- top of the letters, dimmer toward the bottom, like the glass rows' sheen),
-        -- and one very faint near-white copy 1px below catches the lower edge.
+        -- Glint sweep: every 6-10 s a thin, slanted bright streak slides across the
+        -- letters, like light passing over glass. It is a narrow white band in a
+        -- UIGradient on the title text whose Offset is tweened from left to right.
         local glowLayers = {}
-        create("UIGradient", {Rotation = 90, Color = ColorSequence.new({
-            ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 252, 255)),
-            ColorSequenceKeypoint.new(0.45, Theme.mist),
-            ColorSequenceKeypoint.new(1, Color3.fromRGB(176, 160, 210)),
+        local glint = create("UIGradient", {Rotation = 20, Offset = Vector2.new(-1.2, 0), Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, Theme.mist),
+            ColorSequenceKeypoint.new(0.42, Theme.mist),
+            ColorSequenceKeypoint.new(0.5, Color3.new(1, 1, 1)),
+            ColorSequenceKeypoint.new(0.58, Theme.mist),
+            ColorSequenceKeypoint.new(1, Theme.mist),
         }), Parent = heading})
-        create("TextLabel", {Name = "TitleBottomLight", BackgroundTransparency = 1,
-            Position = heading.Position + UDim2.fromOffset(0, 1), Size = heading.Size, FontFace = heading.FontFace,
-            Text = heading.Text, TextSize = heading.TextSize, TextColor3 = Theme.spec,
-            TextTransparency = 0.86, TextXAlignment = heading.TextXAlignment,
-            TextYAlignment = heading.TextYAlignment, ZIndex = 0, Parent = holder})
+        task.spawn(function()
+            local glintRng = Random.new()
+            task.wait(glintRng:NextNumber(1.5, 4))
+            while holder.Parent and not state.destroyed do
+                glint.Offset = Vector2.new(-1.2, 0)
+                tween(glint, 1.1, {Offset = Vector2.new(1.2, 0)}, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+                task.wait(1.1 + glintRng:NextNumber(6, 10))
+            end
+        end)
         -- The rule is the right half of the regular divider: same layer count, taper,
         -- per-layer fade and colour (read from Divider), bright at the title, thinning out.
         local LEAD = 0
