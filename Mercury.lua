@@ -75,6 +75,10 @@ local Layout = {
     -- morph, slow bubble). Smooth and Balanced also ease off by themselves
     -- when the game alone is near 60 FPS.
     performance = "Smooth",
+    -- Standard length (seconds) of any open/close animation, both directions:
+    -- matches the minimize morph (~0.85-1.25 s, 1.05 on average). New animated
+    -- elements use this so everything opens and closes at the same pace.
+    transitionTime = 1.05,
 }
 
 -- Tapered divider: many stacked lines, each narrower and thicker, so the
@@ -4874,7 +4878,7 @@ do
  local surface,label=nil,nil
  local m=nil
  -- fluid parameters (px, frames at 60 fps; 2 substeps per frame)
- local FL={h=15,rho0=3,k=.75,kn=2.5,sig=.2,beta=.1,maxV=10,count=260,rush=7,blob=4.6}
+ local FL={h=15,rho0=3,k=.75,kn=2.5,sig=.2,beta=.1,maxV=10,count=260,rush=8.5,blob=4.6}
  local function ensure()
   if surface then return end
   surface=newSurface(WW,WH)
@@ -5023,7 +5027,7 @@ do
   local g=sim.g
   if sim.mode=='fill' then
    if sim.t<.18 then if rand(0,1)<.6 then inject(sim,1,1.4,1.5) end
-   elseif sim.injected<FL.count then inject(sim,min(7,FL.count-sim.injected),FL.rush,4.2)
+   elseif sim.injected<FL.count then inject(sim,min(10,FL.count-sim.injected),FL.rush,4.2)
    elseif sim.snapAt<0 then sim.snapAt=sim.t+.12 end
    if sim.snapAt>0 and sim.t>=sim.snapAt and sim.neckOpen then
     sim.neckOpen=false
@@ -5083,7 +5087,7 @@ do
    ensure();label.ImageTransparency=0
    local h=panelPixels().Y
    local g=geometry(h)
-   m={opening=true,onRight=onRight,onDone=onDone,g=g,sim=newSim(g),simClock=clock}
+   m={opening=true,onRight=onRight,onDone=onDone,g=g,sim=newSim(g),simClock=clock,openClock=clock}
   end,
   close=function(onRight,onDone)
    ensure();label.ImageTransparency=0
@@ -5109,7 +5113,8 @@ do
     local sim=m.sim
     stepFor(sim)
     -- settle once the slosh has died down: the clean card grows in under the liquid
-    if not sim.neckOpen and sim.t>sim.snapAt+.8 and not m.settleAt then m.settleAt=clock end
+    local total=Layout.transitionTime or 1.05
+    if not sim.neckOpen and clock>=m.openClock+total-.3 and not m.settleAt then m.settleAt=clock end
     local settle=m.settleAt and clamp((clock-m.settleAt)/.3,0,1) or 0
     if settle>=1 then
      draw(w,h,r,nil,1)

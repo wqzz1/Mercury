@@ -46,6 +46,10 @@ local Layout = {
     -- morph, slow bubble). Smooth and Balanced also ease off by themselves
     -- when the game alone is near 60 FPS.
     performance = "Smooth",
+    -- Standard length (seconds) of any open/close animation, both directions:
+    -- matches the minimize morph (~0.85-1.25 s, 1.05 on average). New animated
+    -- elements use this so everything opens and closes at the same pace.
+    transitionTime = 1.05,
 }
 
 -- Tapered divider: many stacked lines, each narrower and thicker, so the
