@@ -3564,6 +3564,9 @@ ch:Fire('ready')
     local maskBuf=buffer.create(W_*H_*4)
     for _,piece in ipairs(entry) do buffer.copy(maskBuf,piece[1]*W_*4,piece[3],0,buffer.len(piece[3])) end
     if liveBegin(maskBuf) then
+     -- clear the last animation frame first: liquid around the card from the
+     -- settling flow would otherwise stay on screen behind it
+     image:WritePixelsBuffer(Vector2.zero,Vector2.new(W_,H_),buffer.create(W_*H_*4))
      m.liveOn=true;liveDraw(entry.ox,entry.oy);liveShow(true)
     end
     return
