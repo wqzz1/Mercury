@@ -39,35 +39,23 @@ local ThemeRoles = {
     {name = "SwirlDeep", key = "lavaDeep"},     -- marble swirl, deep layer
 }
 -- Built-in themes: the default palette moved to one hue (sat/value scale it).
-local ThemeOrder = {"Default", "Mono", "Red", "Orange", "Hot Orange", "Green", "Turquoise", "Hot Pink"}
+-- "Rainbow" is not a palette: it slowly cycles the hue through every colour (api.lua)
+local ThemeOrder = {"Default", "Mono", "Red", "Brown", "Orange", "Green", "Turquoise", "Hot Pink", "Rainbow"}
+-- sat / value scale the default palette's saturation and brightness
 local ThemeTints = {
-    Mono = {sat = 0},
-    Red = {hue = 0.988, sat = 1.05},
-    Orange = {hue = 0.075, sat = 1.05},
-    ["Hot Orange"] = {hue = 0.045, sat = 1.3, value = 1.06},
-    Green = {hue = 0.37},
-    Turquoise = {hue = 0.475},
-    ["Hot Pink"] = {hue = 0.915, sat = 1.25, value = 1.04},
+    Mono = {sat = 0, value = 1.1},
+    Red = {hue = 0.988, sat = 1.35, value = 1.15},
+    Brown = {hue = 0.075, sat = 1.15, value = 1.08},
+    Orange = {hue = 0.088, sat = 1.45, value = 1.18},
+    Green = {hue = 0.37, sat = 1.35, value = 1.15},
+    Turquoise = {hue = 0.475, sat = 1.35, value = 1.15},
+    ["Hot Pink"] = {hue = 0.915, sat = 1.45, value = 1.15},
 }
+local RainbowTint = {sat = 1.35, value = 1.12}
 local DefaultPalette = {}
 for _, role in ThemeRoles do DefaultPalette[role.key] = Theme[role.key] end
-local function themePalette(theme): {[string]: Color3}
-    local palette = table.clone(DefaultPalette)
-    if typeof(theme) == "table" then
-        for _, role in ThemeRoles do
-            local value = theme[role.name] or theme[role.key]
-            if typeof(value) == "Color3" then palette[role.key] = value end
-        end
-    elseif ThemeTints[theme] then
-        local tint = ThemeTints[theme]
-        for _, role in ThemeRoles do
-            if not role.fixed then
-                local h, s, v = DefaultPalette[role.key]:ToHSV()
-                palette[role.key] = Color3.fromHSV(tint.hue or h, math.clamp(s * (tint.sat or 1), 0, 1), math.clamp(v * (tint.value or 1), 0, 1))
-            end
-        end
-    end
-    -- whole 0-255 values, and no two roles equal (colours are matched by value)
+-- whole 0-255 values, and no two roles equal (colours are matched by value)
+local function finishPalette(palette: {[string]: Color3}): {[string]: Color3}
     local used = {}
     for _, role in ThemeRoles do
         local c = palette[role.key]
@@ -77,6 +65,30 @@ local function themePalette(theme): {[string]: Color3}
         palette[role.key] = Color3.fromRGB(r, g, b)
     end
     return palette
+end
+-- the default palette moved to one hue: tint = {hue, sat (scale), value (scale)}
+local function tintPalette(tint): {[string]: Color3}
+    local palette = table.clone(DefaultPalette)
+    for _, role in ThemeRoles do
+        if not role.fixed then
+            local h, s, v = DefaultPalette[role.key]:ToHSV()
+            palette[role.key] = Color3.fromHSV(tint.hue or h, math.clamp(s * (tint.sat or 1), 0, 1), math.clamp(v * (tint.value or 1), 0, 1))
+        end
+    end
+    return finishPalette(palette)
+end
+local function themePalette(theme): {[string]: Color3}
+    if typeof(theme) == "table" then
+        local palette = table.clone(DefaultPalette)
+        for _, role in ThemeRoles do
+            local value = theme[role.name] or theme[role.key]
+            if typeof(value) == "Color3" then palette[role.key] = value end
+        end
+        return finishPalette(palette)
+    elseif ThemeTints[theme] then
+        return tintPalette(ThemeTints[theme])
+    end
+    return finishPalette(table.clone(DefaultPalette))
 end
 
 local Layout = {

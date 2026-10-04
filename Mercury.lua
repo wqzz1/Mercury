@@ -68,35 +68,23 @@ local ThemeRoles = {
     {name = "SwirlDeep", key = "lavaDeep"},     -- marble swirl, deep layer
 }
 -- Built-in themes: the default palette moved to one hue (sat/value scale it).
-local ThemeOrder = {"Default", "Mono", "Red", "Orange", "Hot Orange", "Green", "Turquoise", "Hot Pink"}
+-- "Rainbow" is not a palette: it slowly cycles the hue through every colour (api.lua)
+local ThemeOrder = {"Default", "Mono", "Red", "Brown", "Orange", "Green", "Turquoise", "Hot Pink", "Rainbow"}
+-- sat / value scale the default palette's saturation and brightness
 local ThemeTints = {
-    Mono = {sat = 0},
-    Red = {hue = 0.988, sat = 1.05},
-    Orange = {hue = 0.075, sat = 1.05},
-    ["Hot Orange"] = {hue = 0.045, sat = 1.3, value = 1.06},
-    Green = {hue = 0.37},
-    Turquoise = {hue = 0.475},
-    ["Hot Pink"] = {hue = 0.915, sat = 1.25, value = 1.04},
+    Mono = {sat = 0, value = 1.1},
+    Red = {hue = 0.988, sat = 1.35, value = 1.15},
+    Brown = {hue = 0.075, sat = 1.15, value = 1.08},
+    Orange = {hue = 0.088, sat = 1.45, value = 1.18},
+    Green = {hue = 0.37, sat = 1.35, value = 1.15},
+    Turquoise = {hue = 0.475, sat = 1.35, value = 1.15},
+    ["Hot Pink"] = {hue = 0.915, sat = 1.45, value = 1.15},
 }
+local RainbowTint = {sat = 1.35, value = 1.12}
 local DefaultPalette = {}
 for _, role in ThemeRoles do DefaultPalette[role.key] = Theme[role.key] end
-local function themePalette(theme): {[string]: Color3}
-    local palette = table.clone(DefaultPalette)
-    if typeof(theme) == "table" then
-        for _, role in ThemeRoles do
-            local value = theme[role.name] or theme[role.key]
-            if typeof(value) == "Color3" then palette[role.key] = value end
-        end
-    elseif ThemeTints[theme] then
-        local tint = ThemeTints[theme]
-        for _, role in ThemeRoles do
-            if not role.fixed then
-                local h, s, v = DefaultPalette[role.key]:ToHSV()
-                palette[role.key] = Color3.fromHSV(tint.hue or h, math.clamp(s * (tint.sat or 1), 0, 1), math.clamp(v * (tint.value or 1), 0, 1))
-            end
-        end
-    end
-    -- whole 0-255 values, and no two roles equal (colours are matched by value)
+-- whole 0-255 values, and no two roles equal (colours are matched by value)
+local function finishPalette(palette: {[string]: Color3}): {[string]: Color3}
     local used = {}
     for _, role in ThemeRoles do
         local c = palette[role.key]
@@ -106,6 +94,30 @@ local function themePalette(theme): {[string]: Color3}
         palette[role.key] = Color3.fromRGB(r, g, b)
     end
     return palette
+end
+-- the default palette moved to one hue: tint = {hue, sat (scale), value (scale)}
+local function tintPalette(tint): {[string]: Color3}
+    local palette = table.clone(DefaultPalette)
+    for _, role in ThemeRoles do
+        if not role.fixed then
+            local h, s, v = DefaultPalette[role.key]:ToHSV()
+            palette[role.key] = Color3.fromHSV(tint.hue or h, math.clamp(s * (tint.sat or 1), 0, 1), math.clamp(v * (tint.value or 1), 0, 1))
+        end
+    end
+    return finishPalette(palette)
+end
+local function themePalette(theme): {[string]: Color3}
+    if typeof(theme) == "table" then
+        local palette = table.clone(DefaultPalette)
+        for _, role in ThemeRoles do
+            local value = theme[role.name] or theme[role.key]
+            if typeof(value) == "Color3" then palette[role.key] = value end
+        end
+        return finishPalette(palette)
+    elseif ThemeTints[theme] then
+        return tintPalette(ThemeTints[theme])
+    end
+    return finishPalette(table.clone(DefaultPalette))
 end
 
 local Layout = {
@@ -2520,9 +2532,12 @@ local material=(function()
   for i,orb in ipairs(orbData) do
    local D=orb.frame.Size.X.Offset*k;local size=ceil(D)+2
    local image=newImage(size,size);image:WritePixelsBuffer(Vector2.zero,Vector2.new(size,size),orbPixels(orb,size,D))
-   orbSprites[i]={image=image,size=size,D=D}
+   -- the panel shows a white copy tinted by ImageColor3, so a theme recolours it at once;
+   -- the coloured one is what the liquid's marble draws
+   local white=newImage(size,size);white:WritePixelsBuffer(Vector2.zero,Vector2.new(size,size),orbPixels({color=Color3.new(1,1,1),rings=orb.rings,alpha=orb.alpha},size,D))
+   orbSprites[i]={image=image,size=size,D=D,white=white}
    for _,ring in ipairs(orb.frame:GetChildren()) do if ring:IsA('GuiObject') then ring.Visible=false end end
-   local label=create('ImageLabel',{Name='OrbSprite',BackgroundTransparency=1,AnchorPoint=Vector2.new(.5,.5),Position=UDim2.fromScale(.5,.5),Size=UDim2.fromOffset(size/k,size/k),ImageContent=Content.fromObject(image),Parent=orb.frame})
+   local label=create('ImageLabel',{Name='OrbSprite',BackgroundTransparency=1,AnchorPoint=Vector2.new(.5,.5),Position=UDim2.fromScale(.5,.5),Size=UDim2.fromOffset(size/k,size/k),ImageColor3=orb.color,ImageContent=Content.fromObject(white),Parent=orb.frame})
    passThrough(label)
   end
  end
@@ -2900,17 +2915,26 @@ local material=(function()
  -- A theme change recolours the backdrop instances; read their colours again,
  -- re-bake the orb glows in place and rebuild the per-size layers.
  function m.recolor()
-  for i,orb in ipairs(orbData) do
-   local ring=orb.frame:FindFirstChildWhichIsA('Frame')
-   if ring then orb.color=ring.BackgroundColor3 end
-   local sprite=orbSprites[i]
-   if sprite then sprite.image:WritePixelsBuffer(Vector2.zero,Vector2.new(sprite.size,sprite.size),orbPixels(orb,sprite.size,sprite.D)) end
-  end
-  for _,vein in ipairs(veinData) do local c=vein.frame.BackgroundColor3;vein.rgb=byte(c.R)+byte(c.G)*256+byte(c.B)*65536 end
-  for _,layer in ipairs(topLayers) do layer.color=layer.instance.BackgroundColor3 end
-  local old=assets;assets=nil
-  if old then task.delay(1,release,old) end
-  m.invalidateSheet()
+  m.recolorToken=(m.recolorToken or 0)+1
+  local token=m.recolorToken
+  task.spawn(function()
+   for i,orb in ipairs(orbData) do
+    local ring=orb.frame:FindFirstChildWhichIsA('Frame')
+    if ring then orb.color=ring.BackgroundColor3 end
+    local sprite=orbSprites[i]
+    if sprite then sprite.image:WritePixelsBuffer(Vector2.zero,Vector2.new(sprite.size,sprite.size),orbPixels(orb,sprite.size,sprite.D)) end
+    task.wait();if token~=m.recolorToken then return end
+   end
+   for _,vein in ipairs(veinData) do local c=vein.frame.BackgroundColor3;vein.rgb=byte(c.R)+byte(c.G)*256+byte(c.B)*65536 end
+   for _,layer in ipairs(topLayers) do layer.color=layer.instance.BackgroundColor3 end
+   local size=panelSize()
+   local ok,new=pcall(build,size.X,size.Y,true)
+   if not ok then return end
+   if token~=m.recolorToken then release(new);return end
+   local old=assets;assets=new
+   if old then task.delay(1,release,old) end
+   m.invalidateSheet()
+  end)
  end
  Resize.recolorMaterial=m.recolor
  function m.prepare(size)
@@ -5473,6 +5497,25 @@ do
   local ok,err=pcall(render,points,{})
   if ok then
    local chain=reductionChain(SIZE,SIZE,2);reduce(surface.image,chain);gripImage=chain
+   do -- themes: re-tint the baked grip from its original pixels
+    local top=chain[#chain];local tsize=top.Size;local count=tsize.X*tsize.Y
+    local original=top:ReadPixelsBuffer(Vector2.zero,tsize)
+    Resize.themeHooks=Resize.themeHooks or {}
+    table.insert(Resize.themeHooks,function()
+     local tint=Resize.themeTint
+     if not tint or tint.default then top:WritePixelsBuffer(Vector2.zero,tsize,original);return end
+     local out=buffer.create(count*4)
+     for i=0,count-1 do
+      local p=buffer.readu32(original,i*4);local a=p//16777216
+      if a>0 then
+       local h,s,v=Color3.fromRGB(p%256,(p//256)%256,(p//65536)%256):ToHSV()
+       local c=Color3.fromHSV(tint.hue,math.clamp(s*tint.sat,0,1),math.clamp(v*tint.value,0,1))
+       buffer.writeu32(out,i*4,math.round(c.R*255)+math.round(c.G*255)*256+math.round(c.B*255)*65536+a*16777216)
+      end
+     end
+     top:WritePixelsBuffer(Vector2.zero,tsize,out)
+    end)
+   end
    for _,child in ipairs(grip:GetChildren()) do if child:IsA('GuiObject') then child.Visible=false end end
    local box=grip.Size.X.Offset
    -- corner-arc centre in grip coordinates (logical): grip box is centred on the panel corner
@@ -6944,35 +6987,100 @@ window.Theme = "Default"
 local function colorKey(c: Color3): number
     return math.round(c.R * 255) * 65536 + math.round(c.G * 255) * 256 + math.round(c.B * 255)
 end
-function window:SetTheme(theme)
-    local palette = themePalette(theme)
-    local map = {}
-    for _, role in ThemeRoles do map[colorKey(Theme[role.key])] = palette[role.key] end
-    local function keep(o) return o:GetAttribute("MercuryKeep") or (o.Parent ~= nil and o.Parent:GetAttribute("MercuryKeep")) end
+local function keepColor(o) return o:GetAttribute("MercuryKeep") or (o.Parent ~= nil and o.Parent:GetAttribute("MercuryKeep")) end
+-- Every themed colour in the window as {instance, property, role key}; a gradient
+-- is {instance, "Gradient", {keypoint index -> role key}}. `known` maps colour
+-- values (current and recent palettes) to role keys.
+local function scanThemed(known)
+    local list = {}
+    local function bind(o, prop, value)
+        local key = known[colorKey(value)]
+        if key then list[#list + 1] = {o, prop, key} end
+    end
     for _, o in screenGui:GetDescendants() do
-        if keep(o) then continue end
+        if keepColor(o) then continue end
         if o:IsA("GuiObject") then
-            local n = map[colorKey(o.BackgroundColor3)]; if n then o.BackgroundColor3 = n end
+            bind(o, "BackgroundColor3", o.BackgroundColor3)
             if o:IsA("TextLabel") or o:IsA("TextButton") or o:IsA("TextBox") then
-                n = map[colorKey(o.TextColor3)]; if n then o.TextColor3 = n end
-                if o:IsA("TextBox") then n = map[colorKey(o.PlaceholderColor3)]; if n then o.PlaceholderColor3 = n end end
+                bind(o, "TextColor3", o.TextColor3)
+                if o:IsA("TextBox") then bind(o, "PlaceholderColor3", o.PlaceholderColor3) end
             elseif o:IsA("ImageLabel") or o:IsA("ImageButton") then
-                n = map[colorKey(o.ImageColor3)]; if n then o.ImageColor3 = n end
+                bind(o, "ImageColor3", o.ImageColor3)
             end
         elseif o:IsA("UIStroke") then
-            local n = map[colorKey(o.Color)]; if n then o.Color = n end
+            bind(o, "Color", o.Color)
         elseif o:IsA("UIGradient") then
-            local keys, changed = {}, false
+            local roles, any = {}, false
             for i, point in o.Color.Keypoints do
-                local n = map[colorKey(point.Value)]
-                if n then changed = true end
-                keys[i] = ColorSequenceKeypoint.new(point.Time, n or point.Value)
+                local key = known[colorKey(point.Value)]
+                if key then roles[i] = key; any = true end
             end
-            if changed then o.Color = ColorSequence.new(keys) end
+            if any then list[#list + 1] = {o, "Gradient", roles} end
+        end
+    end
+    return list
+end
+local function knownColors(palettes)
+    local known = {}
+    for _, palette in palettes do for _, role in ThemeRoles do known[colorKey(palette[role.key])] = role.key end end
+    return known
+end
+local function applyPalette(palette, bindings)
+    for _, b in bindings do
+        local o = b[1]
+        if o.Parent then
+            if b[2] == "Gradient" then
+                local keys = {}
+                for i, point in o.Color.Keypoints do
+                    local key = b[3][i]
+                    keys[i] = ColorSequenceKeypoint.new(point.Time, if key then palette[key] else point.Value)
+                end
+                o.Color = ColorSequence.new(keys)
+            else
+                o[b[2]] = palette[b[3]]
+            end
         end
     end
     for key, value in palette do Theme[key] = value end
+    -- pixel-baked pieces (resize grip) follow the accent's hue
+    local h0, s0, v0 = DefaultPalette.violet:ToHSV()
+    local h1, s1, v1 = Theme.violet:ToHSV()
+    Resize.themeTint = {hue = h1, sat = s1 / math.max(s0, 1e-3), value = v1 / math.max(v0, 1e-3),
+        default = Theme.violet == DefaultPalette.violet}
     for _, hook in Resize.themeHooks or {} do task.spawn(hook, Theme) end
+end
+local rainbowToken = 0
+local themeHistory = {} -- recent rainbow palettes, so leaving Rainbow finds every colour
+function window:SetTheme(theme)
+    rainbowToken += 1
+    if theme == "Rainbow" then
+        -- the hue drifts through every colour (a full turn in ~25 s); bindings are
+        -- rescanned every 2 s against recent palettes, the marble every 2.5 s
+        local token = rainbowToken
+        self.Theme = "Rainbow"
+        task.spawn(function()
+            local hue = (Theme.violet:ToHSV())
+            local history = themeHistory
+            table.clear(history); table.insert(history, table.clone(Theme))
+            local bindings, scanned, rebuilt = nil, 0, os.clock()
+            while token == rainbowToken and not state.destroyed do
+                local now = os.clock()
+                if not bindings or now - scanned > 2 then bindings = scanThemed(knownColors(history)); scanned = now end
+                local palette = tintPalette({hue = hue, sat = RainbowTint.sat, value = RainbowTint.value})
+                applyPalette(palette, bindings)
+                table.insert(history, palette)
+                if #history > 40 then table.remove(history, 1) end
+                if now - rebuilt > 2.5 and Resize.recolorMaterial then rebuilt = now; pcall(Resize.recolorMaterial) end
+                hue = (hue + 0.004) % 1
+                task.wait(0.1)
+            end
+        end)
+        return self
+    end
+    local palettes = {Theme}
+    for _, palette in themeHistory do table.insert(palettes, palette) end
+    table.clear(themeHistory)
+    applyPalette(themePalette(theme), scanThemed(knownColors(palettes)))
     if Resize.recolorMaterial then pcall(Resize.recolorMaterial) end
     self.Theme = if typeof(theme) == "string" and ThemeTints[theme] then theme elseif typeof(theme) == "table" then "Custom" else "Default"
     return self

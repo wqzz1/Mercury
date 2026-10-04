@@ -555,9 +555,12 @@ local material=(function()
   for i,orb in ipairs(orbData) do
    local D=orb.frame.Size.X.Offset*k;local size=ceil(D)+2
    local image=newImage(size,size);image:WritePixelsBuffer(Vector2.zero,Vector2.new(size,size),orbPixels(orb,size,D))
-   orbSprites[i]={image=image,size=size,D=D}
+   -- the panel shows a white copy tinted by ImageColor3, so a theme recolours it at once;
+   -- the coloured one is what the liquid's marble draws
+   local white=newImage(size,size);white:WritePixelsBuffer(Vector2.zero,Vector2.new(size,size),orbPixels({color=Color3.new(1,1,1),rings=orb.rings,alpha=orb.alpha},size,D))
+   orbSprites[i]={image=image,size=size,D=D,white=white}
    for _,ring in ipairs(orb.frame:GetChildren()) do if ring:IsA('GuiObject') then ring.Visible=false end end
-   local label=create('ImageLabel',{Name='OrbSprite',BackgroundTransparency=1,AnchorPoint=Vector2.new(.5,.5),Position=UDim2.fromScale(.5,.5),Size=UDim2.fromOffset(size/k,size/k),ImageContent=Content.fromObject(image),Parent=orb.frame})
+   local label=create('ImageLabel',{Name='OrbSprite',BackgroundTransparency=1,AnchorPoint=Vector2.new(.5,.5),Position=UDim2.fromScale(.5,.5),Size=UDim2.fromOffset(size/k,size/k),ImageColor3=orb.color,ImageContent=Content.fromObject(white),Parent=orb.frame})
    passThrough(label)
   end
  end
@@ -935,17 +938,26 @@ local material=(function()
  -- A theme change recolours the backdrop instances; read their colours again,
  -- re-bake the orb glows in place and rebuild the per-size layers.
  function m.recolor()
-  for i,orb in ipairs(orbData) do
-   local ring=orb.frame:FindFirstChildWhichIsA('Frame')
-   if ring then orb.color=ring.BackgroundColor3 end
-   local sprite=orbSprites[i]
-   if sprite then sprite.image:WritePixelsBuffer(Vector2.zero,Vector2.new(sprite.size,sprite.size),orbPixels(orb,sprite.size,sprite.D)) end
-  end
-  for _,vein in ipairs(veinData) do local c=vein.frame.BackgroundColor3;vein.rgb=byte(c.R)+byte(c.G)*256+byte(c.B)*65536 end
-  for _,layer in ipairs(topLayers) do layer.color=layer.instance.BackgroundColor3 end
-  local old=assets;assets=nil
-  if old then task.delay(1,release,old) end
-  m.invalidateSheet()
+  m.recolorToken=(m.recolorToken or 0)+1
+  local token=m.recolorToken
+  task.spawn(function()
+   for i,orb in ipairs(orbData) do
+    local ring=orb.frame:FindFirstChildWhichIsA('Frame')
+    if ring then orb.color=ring.BackgroundColor3 end
+    local sprite=orbSprites[i]
+    if sprite then sprite.image:WritePixelsBuffer(Vector2.zero,Vector2.new(sprite.size,sprite.size),orbPixels(orb,sprite.size,sprite.D)) end
+    task.wait();if token~=m.recolorToken then return end
+   end
+   for _,vein in ipairs(veinData) do local c=vein.frame.BackgroundColor3;vein.rgb=byte(c.R)+byte(c.G)*256+byte(c.B)*65536 end
+   for _,layer in ipairs(topLayers) do layer.color=layer.instance.BackgroundColor3 end
+   local size=panelSize()
+   local ok,new=pcall(build,size.X,size.Y,true)
+   if not ok then return end
+   if token~=m.recolorToken then release(new);return end
+   local old=assets;assets=new
+   if old then task.delay(1,release,old) end
+   m.invalidateSheet()
+  end)
  end
  Resize.recolorMaterial=m.recolor
  function m.prepare(size)
@@ -3508,6 +3520,25 @@ do
   local ok,err=pcall(render,points,{})
   if ok then
    local chain=reductionChain(SIZE,SIZE,2);reduce(surface.image,chain);gripImage=chain
+   do -- themes: re-tint the baked grip from its original pixels
+    local top=chain[#chain];local tsize=top.Size;local count=tsize.X*tsize.Y
+    local original=top:ReadPixelsBuffer(Vector2.zero,tsize)
+    Resize.themeHooks=Resize.themeHooks or {}
+    table.insert(Resize.themeHooks,function()
+     local tint=Resize.themeTint
+     if not tint or tint.default then top:WritePixelsBuffer(Vector2.zero,tsize,original);return end
+     local out=buffer.create(count*4)
+     for i=0,count-1 do
+      local p=buffer.readu32(original,i*4);local a=p//16777216
+      if a>0 then
+       local h,s,v=Color3.fromRGB(p%256,(p//256)%256,(p//65536)%256):ToHSV()
+       local c=Color3.fromHSV(tint.hue,math.clamp(s*tint.sat,0,1),math.clamp(v*tint.value,0,1))
+       buffer.writeu32(out,i*4,math.round(c.R*255)+math.round(c.G*255)*256+math.round(c.B*255)*65536+a*16777216)
+      end
+     end
+     top:WritePixelsBuffer(Vector2.zero,tsize,out)
+    end)
+   end
    for _,child in ipairs(grip:GetChildren()) do if child:IsA('GuiObject') then child.Visible=false end end
    local box=grip.Size.X.Offset
    -- corner-arc centre in grip coordinates (logical): grip box is centred on the panel corner

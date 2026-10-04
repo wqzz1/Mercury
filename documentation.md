@@ -326,8 +326,8 @@ The Settings tab has an **Appearance → Theme** dropdown. The choice is saved t
 `Mercury/Theme.txt` in the executor workspace (when the executor has file
 functions) and comes back the next time a Mercury window opens.
 
-Built-in themes: `Default`, `Mono`, `Red`, `Orange`, `Hot Orange`, `Green`,
-`Turquoise`, `Hot Pink`.
+Built-in themes: `Default`, `Mono`, `Red`, `Brown`, `Orange`, `Green`,
+`Turquoise`, `Hot Pink`, and `Rainbow` (slowly cycles through every hue).
 
 ```lua
 local window = Mercury:CreateWindow({Name = "My Script", Theme = "Turquoise"})
