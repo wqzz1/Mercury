@@ -371,15 +371,21 @@ local function addColorPicker(container, config)
             result.beadGloss = bake(B, function(u, v, r)
                 local cover = math.clamp((1 - r) * (B / 2) / 2.2 + 0.5, 0, 1)
                 if cover <= 0 then return 0, 0 end
-                local depth = 0.5 * smoothstep(-0.2, 1, v) ^ 1.4 + 0.2 * r ^ 4
-                -- soft specular window, top-left, following the curve
-                local du, dv = u + 0.3, v + 0.43
-                local ca, sa = math.cos(math.rad(35)), math.sin(math.rad(35))
-                local xr, yr = du * ca + dv * sa, -du * sa + dv * ca
-                local e = math.sqrt((xr / 0.5) ^ 2 + (yr / 0.27) ^ 2)
-                local highlight = 0.8 * (1 - smoothstep(0.1, 1, e))
-                -- light bending through the bottom-right of the glass
-                local caustic = 0.28 * smoothstep(0.66, 0.95, r) * (1 - smoothstep(0.95, 1, r)) * smoothstep(0.2, 0.85, u * 0.5 + v * 0.86)
+                local depth = 0.42 * smoothstep(-0.1, 1, v) ^ 1.5 + 0.16 * r ^ 5
+                -- specular crescent that follows the curve of the glass: inside the
+                -- bead's edge, outside the same circle shifted toward the bottom right,
+                -- brightest at the top left and thinning out around the arc
+                local inner = math.sqrt((u - 0.13) ^ 2 + (v - 0.17) ^ 2)
+                local band = smoothstep(0.9, 0.86, r) * smoothstep(0.84, 0.92, inner)
+                local angle = math.atan2(v, u)
+                band *= smoothstep(0.05, 0.85, math.cos(angle - math.rad(-128)))
+                local highlight = 0.85 * band
+                -- a small specular point on the crescent
+                local point = math.sqrt((u + 0.42) ^ 2 + (v + 0.5) ^ 2)
+                highlight = math.max(highlight, 0.55 * (1 - smoothstep(0, 0.13, point)))
+                -- light bending back out through the bottom right
+                local caustic = 0.3 * smoothstep(0.7, 0.93, r) * (1 - smoothstep(0.93, 1, r))
+                    * smoothstep(0.3, 0.9, math.cos(angle - math.rad(52)))
                 local white = math.max(highlight, caustic)
                 local a = white + depth * (1 - white)
                 return (a > 0 and white / a or 0), a * cover
