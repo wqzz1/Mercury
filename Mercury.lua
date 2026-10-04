@@ -5698,7 +5698,28 @@ function window:CreateTab(name, icon)
         end
         heading:GetPropertyChangedSignal("TextBounds"):Connect(placeRule)
         placeRule()
-        -- The rule is the right half of the regular divider: same layer count, taper,
+        -- Soft halo behind the title: the library's pre-blurred (true Gaussian) glow
+        -- sprite, tinted lilac and very faint, sized to the text as a small pill.
+        local titleGlow = nil
+        local glowImage = loadEmbeddedImage("skeleton-glow.png", EmbeddedPng.glow)
+        if glowImage then
+            local m, r, s = GLOW_SPRITE.margin, GLOW_SPRITE.radius, GLOW_SPRITE.size
+            local GLOW_RADIUS, GLOW_PAD = 7, 4
+            local scale = GLOW_RADIUS / r
+            local spread = m * scale
+            titleGlow = create("ImageLabel", {Name = "TitleGlow", BackgroundTransparency = 1, Image = glowImage,
+                ImageColor3 = Theme.lilac, ImageTransparency = 0.84, ScaleType = Enum.ScaleType.Slice,
+                SliceCenter = Rect.new(m + r, m + r, s - m - r, s - m - r), SliceScale = scale,
+                AnchorPoint = Vector2.new(0, 0.5), ZIndex = 0, Parent = holder})
+            passThrough(titleGlow)
+            local function placeGlow()
+                local bounds = heading.TextBounds
+                titleGlow.Position = UDim2.fromOffset(TITLE_X - GLOW_PAD - spread, HEAD_H / 2)
+                titleGlow.Size = UDim2.fromOffset(bounds.X + (GLOW_PAD + spread) * 2, math.max(bounds.Y, 11) + (GLOW_PAD + spread) * 2)
+            end
+            heading:GetPropertyChangedSignal("TextBounds"):Connect(placeGlow)
+            placeGlow()
+        end        -- The rule is the right half of the regular divider: same layer count, taper,
         -- per-layer fade and colour (read from Divider), bright at the title, thinning out.
         local LEAD = 0
         local boxHeight = Divider.maxThickness
@@ -5754,6 +5775,7 @@ function window:CreateTab(name, icon)
         function section:Toggle() return self:SetCollapsed(not self.Collapsed) end
         local function setHover(on)
             tween(heading, 0.18, {TextTransparency = if on then 0 else 0.18})
+            if titleGlow then tween(titleGlow, 0.18, {ImageTransparency = if on then 0.74 else 0.84}) end
             for _, bar in chevronBars do tween(bar, 0.18, {BackgroundColor3 = if on then Theme.mist else Theme.mistDim}) end
         end
         track(headButton.MouseEnter:Connect(function() setHover(true) end))
