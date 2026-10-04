@@ -3819,7 +3819,7 @@ do
   -- The dark body sits 1 px inside the liquid edge on every side: its own
   -- anti-aliased edge pixels (half dark) then fall under the rim instead of
   -- showing as a darker line just outside it. The rim stays where it was.
-  local inset=0
+  local inset=1
   backdropCorner.CornerRadius=UDim.new(0,math.max(0,contourRadius-inset)/k)
   backdrop.Position+=UDim2.fromOffset(inset/k,inset/k);backdrop.Size+=UDim2.fromOffset(-2*inset/k,-2*inset/k)
   local rimLabel=backdrop:FindFirstChild('LiquidRim')
