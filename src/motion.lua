@@ -2983,11 +2983,11 @@ end
 -- smooth surface with the panel's marble and rim light.
 local toastMorph=nil
 do
- local WW,WH=296,148
+ local WW,WH=256,116   -- card + 30 px around it (fade band 22 px)
  local surface,label=nil,nil
  local m=nil
  -- fluid parameters (px, frames at 60 fps; 2 substeps per frame)
- local FL={h=15,rho0=3,k=.75,kn=2.5,sig=.2,beta=.1,maxV=10,count=260,rush=8.5,blob=4.6}
+ local FL={h=15,rho0=3,k=.75,kn=2.5,sig=.2,beta=.1,maxV=10,count=260,rush=8.5,blob=5.4}
  local function ensure()
   if surface then return end
   surface=newSurface(WW,WH)
@@ -3004,7 +3004,7 @@ do
  -- the panel's own outline runs off the window's edges: fade a band along every
  -- border so those cuts are invisible (the card always sits well inside it)
  local function fadeBorders()
-  local N=28
+  local N=22
   local readu32,writeu32=buffer.readu32,buffer.writeu32
   for y=0,OH-1 do
    local dy=min(y,OH-1-y)
@@ -3169,7 +3169,7 @@ do
   local g=m.g;local dir=m.onRight and 1 or -1
   local ex=m.onRight and w or 0
   local function X(s) return ex+dir*s end
-  local ox=m.onRight and floor((ex-52)/S)*S or floor((ex-g.gap-g.cw-44)/S)*S
+  local ox=m.onRight and floor((ex-30)/S)*S or floor((ex-g.gap-g.cw-30)/S)*S
   local oy=floor((g.cy-WH/2)/S)*S
   local per=perimeter(w,h,r);local pts={}
   for i=1,120 do local x,y=outlineAt((i-1)/120*per,w,h,r);pts[i]={x-ox,y-oy} end
@@ -3188,7 +3188,7 @@ do
  local function stepFor(sim)
   -- fixed 60 Hz steps from real time, at most 2 per run so it never stalls
   local due=floor((clock-m.simClock)*60)
-  if due>2 then m.simClock=clock-2/60;due=2 end
+  if due>4 then m.simClock=clock-4/60;due=4 end
   for _=1,due do simFrame(sim);m.simClock+=1/60 end
  end
  toastMorph={
@@ -3205,7 +3205,7 @@ do
    m={opening=false,onRight=onRight,onDone=onDone,g=g,start=clock+.18}
   end,
  }
- jobs[#jobs+1]={name='toast',interval=0,elapsed=0,
+ jobs[#jobs+1]={name='toast',interval=0,elapsed=0,priority=true,
   active=function() return m~=nil and root.Visible end,
   reset=function()
    -- interrupted (panel hidden/minimized): finish immediately
@@ -3514,7 +3514,16 @@ liquid.service=function(dt)
  for _=1,#jobs do
   if not runner then
    local count=#jobs
-   for step=1,count do
+   -- a due priority job (the notification morph) goes first once per frame, so it
+   -- redraws every frame instead of waiting its turn behind the other pieces
+   for _,job in ipairs(jobs) do
+    if job.priority and wasActive[job] and job.run and job.elapsed>=job.interval and job.ranAt~=pacing.frameStart then
+     local delta=job.elapsed;job.elapsed=0;job.ranAt=pacing.frameStart
+     runner=coroutine.create(job.run);runnerArgs={delta};runnerJob=job
+     break
+    end
+   end
+   if not runner then for step=1,count do
     local index=(nextJob+step-2)%count+1
     local job=jobs[index]
     if wasActive[job] and job.run and job.elapsed>=job.interval then
@@ -3522,10 +3531,11 @@ liquid.service=function(dt)
      runner=coroutine.create(job.run);runnerArgs={delta};runnerJob=job
      break
     end
-   end
+   end end
   end
   if not runner then break end
-  pacing.budget=pacing.limit;pacing.start=pacing.frameStart
+  -- the priority job gets an extra slice on top of the shared budget
+  pacing.budget=pacing.limit+(runnerJob and runnerJob.priority and .006 or 0);pacing.start=pacing.frameStart
   local args=runnerArgs;runnerArgs=nil
   local ok,err
   if args then ok,err=coroutine.resume(runner,args[1]) else ok,err=coroutine.resume(runner) end
