@@ -2457,8 +2457,9 @@ local material=(function()
   end
  end
 
- -- Stars: small four-point stars twinkle in the marble, in the empty parts of
- -- the background only (never under a row, tab, button or text), and a couple
+ -- Stars: small four-point stars twinkle in the marble, anywhere in the panel;
+ -- the part of a star behind a glass row, tab or button is seen blurred, the
+ -- part in the gaps between them stays sharp. A couple
  -- more in the minimized bubble. Each fades in and out on its own slow rhythm
  -- and reappears somewhere new after fading out; only a few are lit at a time.
  -- While lit, a star scintillates like a real one seen through air: its
@@ -2511,6 +2512,24 @@ local material=(function()
    end
    local sets={}
    for index,tint in ipairs(TINTS) do sets[index]={core=layer(tint,false),spike=layer(tint,true)} end
+   -- the same sprites seen through frosted glass: gaussian-blurred, a little dimmer
+   local function frosted(image)
+    local px=image:ReadPixelsBuffer(Vector2.zero,Vector2.new(SPRITE,SPRITE))
+    local a,t=table.create(SPRITE*SPRITE,0),table.create(SPRITE*SPRITE,0)
+    for i=0,SPRITE*SPRITE-1 do a[i+1]=buffer.readu8(px,i*4+3)/255 end
+    local K={};local sum=0;for o=-5,5 do K[o]=math.exp(-o*o/(2*2.1*2.1));sum+=K[o] end;for o=-5,5 do K[o]/=sum end
+    for y=0,SPRITE-1 do for x=0,SPRITE-1 do local v=0;for o=-5,5 do local xx=x+o;if xx>=0 and xx<SPRITE then v+=a[y*SPRITE+xx+1]*K[o] end end;t[y*SPRITE+x+1]=v end end
+    for y=0,SPRITE-1 do for x=0,SPRITE-1 do local v=0;for o=-5,5 do local yy=y+o;if yy>=0 and yy<SPRITE then v+=t[yy*SPRITE+x+1]*K[o] end end;a[y*SPRITE+x+1]=v end end
+    local out=buffer.create(SPRITE*SPRITE*4)
+    for i=0,SPRITE*SPRITE-1 do
+     local rgb=buffer.readu32(px,i*4)%16777216
+     writeu32(out,i*4,rgb+floor(clamp(a[i+1]*1.35,0,1)*.8*255+.5)*16777216)
+    end
+    local img=newImage(SPRITE,SPRITE);img:WritePixelsBuffer(Vector2.zero,Vector2.new(SPRITE,SPRITE),out)
+    return img
+   end
+   local frost={}
+   for index,set in ipairs(sets) do frost[index]={core=frosted(set.core.full),spike=frosted(set.spike.full)} end
    local rng=Random.new()
    local function pickTint() local roll=rng:NextNumber();return roll<.5 and 1 or roll<.8 and 2 or 3 end
    local function rhythm(star)
@@ -2525,15 +2544,17 @@ local material=(function()
    local panel=backdrop.Parent
    local LAYERS={Backdrop=true,Lens=true,Rim=true,EdgeDroplet=true}
    local rects,rectsAt=nil,-math.huge
+   local glass={}
    local function refreshRects(now)
     if now-rectsAt<.3 then return end
     rectsAt=now
     if not (panel and backdrop.Visible and panel.Visible and panel.AbsoluteSize.X>0) then return end
-    local list={}
+    local list,glassList={},{}
     local area=panel.AbsoluteSize.X*panel.AbsoluteSize.Y
     for _,o in ipairs(panel:GetDescendants()) do
      if o:IsA('GuiObject') and o.Visible and not (o.Parent==panel and LAYERS[o.Name]) then
       local drawn=o.BackgroundTransparency<1
+      local surface=drawn and o:IsA('Frame') or (drawn and o:IsA('GuiButton'))
       if not drawn and (o:IsA('TextLabel') or o:IsA('TextButton') or o:IsA('TextBox')) then drawn=o.Text~='' and o.TextTransparency<1 end
       if not drawn and (o:IsA('ImageLabel') or o:IsA('ImageButton')) then drawn=o.ImageTransparency<1 end
       local p,s=o.AbsolutePosition,o.AbsoluteSize
@@ -2548,11 +2569,11 @@ local material=(function()
         end
         a=a.Parent
        end
-       if shown and x1>x0 and y1>y0 then list[#list+1]={x0,y0,x1,y1} end
+       if shown and x1>x0 and y1>y0 then list[#list+1]={x0,y0,x1,y1};if surface then glassList[#glassList+1]={x0,y0,x1,y1} end end
       end
      end
     end
-    rects=list
+    rects=list;glass=glassList
    end
    local function isFree(fx,fy,size)
     if not rects then return true end
@@ -2567,25 +2588,76 @@ local material=(function()
    end
 
    local list={}
+   -- the glass surface a star overlaps most (backdrop units), or nil
+   local function scaleK() local s=backdrop.AbsoluteSize;return s.X/max(1,root.Size.X.Offset) end
+   local function coverOf(star)
+    local p,s=backdrop.AbsolutePosition,backdrop.AbsoluteSize
+    local k=scaleK();if k<=0 then return nil end
+    local x,y=p.X+star.fx*s.X,p.Y+star.fy*s.Y
+    local r=star.size*.62*k
+    local best,area=nil,0
+    for _,b in ipairs(glass) do
+     local w,h=min(x+r,b[3])-max(x-r,b[1]),min(y+r,b[4])-max(y-r,b[2])
+     if w>0 and h>0 and w*h>area then area=w*h;best=b end
+    end
+    if not best then return nil end
+    return {(best[1]-p.X)/k,(best[2]-p.Y)/k,(best[3]-p.X)/k,(best[4]-p.Y)/k}
+   end
    local function place(star)
     star.tint=pickTint();rhythm(star)
-    for _=1,24 do
-     local fx,fy=rng:NextNumber(.07,.93),rng:NextNumber(.06,.94)
-     if isFree(fx,fy,star.size) then
-      star.fx,star.fy,star.open=fx,fy,true
-      local set=sets[star.tint]
-      star.core.ImageContent=Content.fromObject(set.core.full);star.spike.ImageContent=Content.fromObject(set.spike.full)
-      star.core.Position=UDim2.fromScale(fx,fy);star.spike.Position=star.core.Position
-      return
+    local fx,fy=rng:NextNumber(.07,.93),rng:NextNumber(.06,.94)
+    star.fx,star.fy,star.open=fx,fy,true
+    local set,fz=sets[star.tint],frost[star.tint]
+    star.core.ImageContent=Content.fromObject(set.core.full);star.spike.ImageContent=Content.fromObject(set.spike.full)
+    star.core.Position=UDim2.fromScale(fx,fy);star.spike.Position=star.core.Position
+    for i,clip in ipairs(star.clips) do
+     local blurred=i==1
+     clip.core.ImageContent=Content.fromObject(blurred and fz.core or set.core.full)
+     clip.spike.ImageContent=Content.fromObject(blurred and fz.spike or set.spike.full)
+    end
+    star.rect=coverOf(star)
+   end
+   -- clip 1 shows the star inside its glass rect (blurred); clips 2-5 are the bands
+   -- around that rect (sharp), so a star between surfaces is only blurred where covered
+   local function makeClips()
+    local clips={}
+    for i=1,5 do
+     local frame=create('Frame',{Name='StarClip',BackgroundTransparency=1,ClipsDescendants=true,Visible=false,Parent=backdrop})
+     passThrough(frame)
+     local spike=create('ImageLabel',{BackgroundTransparency=1,AnchorPoint=Vector2.new(.5,.5),ImageTransparency=1,Parent=frame})
+     local core=create('ImageLabel',{BackgroundTransparency=1,AnchorPoint=Vector2.new(.5,.5),ImageTransparency=1,Parent=frame})
+     clips[i]={frame=frame,core=core,spike=spike}
+    end
+    return clips
+   end
+   local function paint(star)
+    local rect=star.rect
+    star.core.Visible=rect==nil;star.spike.Visible=rect==nil
+    if not rect then for _,clip in ipairs(star.clips) do clip.frame.Visible=false end;return end
+    local s=backdrop.AbsoluteSize;local k=scaleK()
+    local cx,cy=star.fx*s.X/k,star.fy*s.Y/k
+    local R=star.size*.65
+    local bx0,by0,bx1,by1=cx-R,cy-R,cx+R,cy+R
+    local x0,y0,x1,y1=max(rect[1],bx0),max(rect[2],by0),min(rect[3],bx1),min(rect[4],by1)
+    local boxes={{x0,y0,x1,y1},{bx0,by0,bx1,y0},{bx0,y1,bx1,by1},{bx0,y0,x0,y1},{x1,y0,bx1,y1}}
+    for i,clip in ipairs(star.clips) do
+     local b=boxes[i]
+     local show=b[3]-b[1]>.01 and b[4]-b[2]>.01
+     clip.frame.Visible=show
+     if show then
+      clip.frame.Position=UDim2.fromOffset(b[1],b[2]);clip.frame.Size=UDim2.fromOffset(b[3]-b[1],b[4]-b[2])
+      local at=UDim2.fromOffset(cx-b[1],cy-b[2])
+      clip.core.Position=at;clip.spike.Position=at
+      clip.core.Size=star.core.Size;clip.spike.Size=star.spike.Size
+      clip.core.ImageTransparency=star.core.ImageTransparency;clip.spike.ImageTransparency=star.spike.ImageTransparency
      end
     end
-    star.open=false -- no empty spot this time: stay dark this cycle
    end
    for index=1,10 do
     local spike=create('ImageLabel',{Name='Star'..index,BackgroundTransparency=1,AnchorPoint=Vector2.new(.5,.5),ImageTransparency=1,Size=UDim2.fromOffset(0,0),Parent=backdrop})
     local core=create('ImageLabel',{Name='StarCore'..index,BackgroundTransparency=1,AnchorPoint=Vector2.new(.5,.5),ImageTransparency=1,Size=UDim2.fromOffset(0,0),Parent=backdrop})
     passThrough(spike);passThrough(core)
-    local star={core=core,spike=spike,size=rng:NextNumber(16,26),peak=rng:NextNumber(.55,.95),period=rng:NextNumber(3.2,6.5),lit=rng:NextNumber(.28,.42),phase=rng:NextNumber(0,10),cycle=-1,fx=.5,fy=.5,open=false,shown=1,tint=1,coreA=0,spikeA=0,coreS=0,spikeS=0}
+    local star={clips=makeClips(),core=core,spike=spike,size=rng:NextNumber(16,26),peak=rng:NextNumber(.55,.95),period=rng:NextNumber(3.2,6.5),lit=rng:NextNumber(.28,.42),phase=rng:NextNumber(0,10),cycle=-1,fx=.5,fy=.5,open=false,shown=1,tint=1,coreA=0,spikeA=0,coreS=0,spikeS=0}
     rhythm(star);list[#list+1]=star
    end
    -- bubble stars: offsets from the bubble's centre in panel units
@@ -2643,12 +2715,13 @@ local material=(function()
     for _,star in ipairs(list) do
      cycleOf(star,now,place)
      -- content moved over a lit star (scroll, tab change): let it fade out
-     if checked and star.open and not isFree(star.fx,star.fy,star.size) then star.open=false end
+     if checked and star.open then star.rect=coverOf(star) end
      star.shown+=((star.open and 1 or 0)-star.shown)*min(1,dt*10)
      shape(star,brightness(star,now,false))
      star.spike.ImageTransparency=1-star.spikeA;star.core.ImageTransparency=1-star.coreA
      star.spike.Size=UDim2.fromOffset(star.size*star.spikeS,star.size*star.spikeS)
      star.core.Size=UDim2.fromOffset(star.size*star.coreS,star.size*star.coreS)
+     paint(star)
      -- the marble pictures use the steadier brightness
      shape(star,brightness(star,now,true))
     end
@@ -2669,6 +2742,7 @@ local material=(function()
     if star.coreA>.03 then local s=star.size*star.coreS*k/SPRITE;image:DrawImageTransformed(Vector2.new(px-tx,py-ty),Vector2.new(s,s),0,set.core.levels[level(star.coreA)],{CombineType=OVER}) end
    end
    local function free()
+    for _,set in ipairs(frost) do set.core:Destroy();set.spike:Destroy() end
     for _,set in ipairs(sets) do for _,part in ipairs({set.core,set.spike}) do
      part.full:Destroy();for _,image in ipairs(part.levels) do image:Destroy() end
     end end
@@ -5055,7 +5129,7 @@ local floor,min,max,sqrt,exp,abs=math.floor,math.min,math.max,math.sqrt,math.exp
 local readu32,writeu32,readf32=buffer.readu32,buffer.writeu32,buffer.readf32
 local RIM_R,RIM_G,RIM_B=226,214,246
 local FW,FH=W//2+1,H//2+1
-local field,tmp,pf=table.create(FW*FH,0),table.create(FW*FH,0),table.create(FW*FH,0)
+local field,tmp,pf,cf=table.create(FW*FH,0),table.create(FW*FH,0),table.create(FW*FH,0),table.create(FW*FH,0)
 -- 1-2-1 smoothing pass over a 2 px grid array
 local function smooth(a)
  for j=0,FH-1 do local row=j*FW
@@ -5086,7 +5160,8 @@ ch.Event:Connect(function(tag,fid,ox,oy,w,h,r,dir,ex,g,cardScale,pos,n,mat)
    local c=0
    if cardScale>0 then c=clamp(.5-sdRR(px,py,cx0-hw,g.cy-hh,cx0+hw,g.cy+hh,cr)/5,0,1.2) end
    -- pf keeps the window's own share of the field, so its outline is never drawn
-   if c>f then field[row+i+1]=c;pf[row+i+1]=0 else field[row+i+1]=f;pf[row+i+1]=f end
+   -- cf keeps the card's share: only the window and the card wear the rim light
+   if c>f then field[row+i+1]=c;pf[row+i+1]=0;cf[row+i+1]=c else field[row+i+1]=f;pf[row+i+1]=f;cf[row+i+1]=0 end
   end
  end
  if pos and n>0 then
@@ -5101,7 +5176,7 @@ ch.Event:Connect(function(tag,fid,ox,oy,w,h,r,dir,ex,g,cardScale,pos,n,mat)
      if d2<R2 then local k=1-d2/R2;field[row+i+1]+=k*k*.72 end end end
   end
   -- two smoothing passes: the particles read as one surface
-  smooth(field);smooth(field);smooth(pf);smooth(pf)
+  smooth(field);smooth(field);smooth(pf);smooth(pf);smooth(cf);smooth(cf)
  end
  -- shade this worker's rows: anti-aliased edge, Mercury's rim light, marble inside
  local out=buffer.create((y1-y0)*W*4)
@@ -5115,6 +5190,7 @@ ch.Event:Connect(function(tag,fid,ox,oy,w,h,r,dir,ex,g,cardScale,pos,n,mat)
    local v=(a00*(1-tx)+a10*tx)*(1-ty)+(a01*(1-tx)+a11*tx)*ty
    local i00=jy*FW+ix+1
    local pv=(pf[i00]*(1-tx)+pf[i00+1]*tx)*(1-ty)+(pf[i00+FW]*(1-tx)+pf[i00+FW+1]*tx)*ty
+   local cv=(cf[i00]*(1-tx)+cf[i00+1]*tx)*(1-ty)+(cf[i00+FW]*(1-tx)+cf[i00+FW+1]*tx)*ty
    if v>.2 then
     local gx=((a10-a00)*(1-ty)+(a11-a01)*ty)/2
     local gy=((a01-a00)*(1-tx)+(a11-a10)*tx)/2
@@ -5126,6 +5202,8 @@ ch.Event:Connect(function(tag,fid,ox,oy,w,h,r,dir,ex,g,cardScale,pos,n,mat)
      local light=(gx*.6+gy*.8)/gl;if light<0 then light=0 elseif light>1 then light=1 end
      local dd=dist>0 and dist or 0
      local shine=exp(-dd*.8)*(.18+.82*light)*.8+exp(-dd*.13)*.22*light;if shine>1 then shine=1 end
+     -- the flowing liquid (particles) has no rim light of its own, only the card does
+     local solid=(pv+cv)*2;if solid<1 then shine*=solid>0 and solid or 0 end
      local edge=min(min(x,W-1-x),min(y,H-1-y));if edge<22 then alpha*=edge/22 end
      -- inside the window the window itself shows: the liquid starts at its edge
      local inside=sdRR(ox+x+.5,oy+y+.5,0,0,w,h,r);if inside<.5 then alpha*=clamp(inside+.5,0,1) end
