@@ -380,9 +380,6 @@ local function addColorPicker(container, config)
                 local angle = math.atan2(v, u)
                 band *= smoothstep(0.4, 0.92, math.cos(angle - math.rad(-128)))
                 local highlight = 0.8 * band
-                -- a small specular point on the crescent
-                local point = math.sqrt((u + 0.45) ^ 2 + (v + 0.52) ^ 2)
-                highlight = math.max(highlight, 0.45 * (1 - smoothstep(0, 0.09, point)))
                 -- light bending back out through the bottom right
                 local caustic = 0.25 * smoothstep(0.74, 0.93, r) * (1 - smoothstep(0.93, 1, r))
                     * smoothstep(0.45, 0.92, math.cos(angle - math.rad(52)))
@@ -1015,7 +1012,7 @@ function window:SetTheme(theme)
             local history = themeHistory
             table.clear(history); table.insert(history, table.clone(Theme))
             local bindings, scanned = nil, 0
-            local building, built, held = false, nil, nil
+            local building, built, held, lastBuild = false, nil, nil, 0
             local function rainbowPalette(h) return tintPalette({hue = h, sat = RainbowTint.sat, value = RainbowTint.value}) end
             local function startBuild(h)
                 if building or not Resize.recolorMaterial then return end
@@ -1043,7 +1040,8 @@ function window:SetTheme(theme)
                     table.insert(history, palette)
                     if #history > 60 then table.remove(history, 1) end
                 end
-                startBuild(hue)
+                -- one marble rebuild per second at most (each costs a little every frame while it runs)
+                if now - lastBuild > 1 then lastBuild = now; startBuild(hue) end
                 hue = (hue + 0.004) % 1
                 task.wait(0.1)
             end
