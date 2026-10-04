@@ -1745,7 +1745,7 @@ do
   -- The dark body sits 1 px inside the liquid edge on every side: its own
   -- anti-aliased edge pixels (half dark) then fall under the rim instead of
   -- showing as a darker line just outside it. The rim stays where it was.
-  local inset=1
+  local inset=0
   backdropCorner.CornerRadius=UDim.new(0,math.max(0,contourRadius-inset)/k)
   backdrop.Position+=UDim2.fromOffset(inset/k,inset/k);backdrop.Size+=UDim2.fromOffset(-2*inset/k,-2*inset/k)
   local rimLabel=backdrop:FindFirstChild('LiquidRim')
@@ -2799,11 +2799,21 @@ do
   passThrough(item.label)
   return item
  end
+ -- A droplet picture is reused from the pool. Its new pixels reach the screen a
+ -- frame after they're written, so showing it at once flashed the previous
+ -- droplet (another spot, even another side) for one frame. It becomes visible
+ -- on its next update instead, when the new picture is already up.
+ local function showItem(item,ox,oy)
+  item.label.Position=UDim2.fromOffset(ox/k,oy/k)
+  if item.label.Visible then return end
+  if item.armed then item.armed=nil;item.label.Visible=true else item.armed=true end
+ end
+ local function hideItem(item) item.label.Visible=false;item.armed=nil end
  local function clearAll()
-  for _,d in ipairs(drops) do d.slot.label.Visible=false;pool[#pool+1]=d.slot end
+  for _,d in ipairs(drops) do hideItem(d.slot);pool[#pool+1]=d.slot end
   table.clear(drops)
-   if drip then drip.slot.label.Visible=false;pool[#pool+1]=drip.slot;drip=nil end
-   for _,f in ipairs(falling) do f.slot.label.Visible=false;pool[#pool+1]=f.slot end;table.clear(falling)
+   if drip then hideItem(drip.slot);pool[#pool+1]=drip.slot;drip=nil end
+   for _,f in ipairs(falling) do hideItem(f.slot);pool[#pool+1]=f.slot end;table.clear(falling)
  end
  local grip=panel:FindFirstChild('ResizeGrip')
  local function spawn(w,h,r,L)
@@ -3029,7 +3039,7 @@ do
     material.compose=function() return shared.material.sheetAt(-ox,-oy) end
     render({},bodies,nil)
     postProcess=nil
-    item.label.Position=UDim2.fromOffset(ox/k,oy/k);item.label.Visible=true
+    showItem(item,ox,oy)
    end
   end
   -- the drip gathering under the bar (one at a time)
@@ -3076,7 +3086,7 @@ do
   material.compose=function() return shared.material.sheetAt(-ox,-oy) end
   render(band,local_,nil)
   postProcess=nil
-  item.label.Position=UDim2.fromOffset(ox/k,oy/k);item.label.Visible=true
+  showItem(item,ox,oy)
  end
  jobs[#jobs+1]={name='edge',interval=0,elapsed=0,
   active=function() return root.Visible and not Resize.dragging end,
@@ -3092,7 +3102,7 @@ do
    if clock>=nextSpawn then local border=0;for _,d in ipairs(drops) do if not d.impact then border+=1 end end;if border<MAX then spawn(w,h,r,L) end;nextSpawn=clock+rand(.55,1.6) end
    for i=#drops,1,-1 do
     local d=drops[i];local t=clock-d.start
-    if t>=d.bud+d.float+d.back then d.slot.label.Visible=false;pool[#pool+1]=d.slot;table.remove(drops,i) else
+    if t>=d.bud+d.float+d.back then hideItem(d.slot);pool[#pool+1]=d.slot;table.remove(drops,i) else
      local arc,off,radius,sep,spin=d.arc,0,d.r,0,0
       if t<d.bud and d.impact then
        -- landed drip: splashes out past its resting distance, wobbles, settles (damped spring)
@@ -3136,7 +3146,7 @@ do
      material.compose=function() return shared.material.sheetAt(-ox,-oy) end
      render(points,local_,{floor(x0/S),floor(y0/S),ceil(x1/S)-1,ceil(y1/S)-1})
      postProcess=nil
-     item.label.Position=UDim2.fromOffset(ox/k,oy/k);item.label.Visible=true
+     showItem(item,ox,oy)
     end
    end
    updateDrip(w,h,r)
@@ -3676,7 +3686,10 @@ ch:Fire('ready')
  end
  if Layout.performance~='Low' then task.spawn(boot) end
  local function finish()
-  local cb=m and m.onDone;m=nil;if label then label.Visible=false end;liveShow(false);if cb then cb() end
+  local cb=m and m.onDone;m=nil
+  if label then label.Visible=false end
+  if image then image:WritePixelsBuffer(Vector2.zero,Vector2.new(W_,H_),buffer.create(W_*H_*4)) end
+  liveShow(false);if cb then cb() end
  end
  track(RunService.Heartbeat:Connect(function()
   if not m or not ready then return end
