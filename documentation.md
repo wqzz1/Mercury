@@ -89,7 +89,7 @@ Mercury stores each control's current value in its `.Value` property. The notifi
 
 ## Windows and tabs
 
-Create a window with `Mercury:CreateWindow(options)`. Each call returns a separate window object.
+Create a window with `Mercury:CreateWindow(options)`. Each call returns a separate window object. Only one window stays open at a time: creating a new one closes the window that is already open (with the same animation as its close button), so re-running your script replaces the old UI instead of stacking a second copy. Pass `AllowMultiple = true` to keep existing windows open.
 
 | Window option | Type | Purpose |
 | --- | --- | --- |
@@ -123,6 +123,8 @@ main:CreateButton({Name = "A tab-level button", Callback = function() end})
 local section = main:CreateSection("Actions")
 section:CreateButton({Name = "A section button", Callback = function() end})
 ```
+
+Click a section's title to collapse or expand its controls. Pass `{Collapsed = true}` as the second argument to start collapsed (`main:CreateSection("Actions", {Collapsed = true})`), call `section:SetCollapsed(true/false)` or `section:Toggle()` from code, and read `section.Collapsed` for the current state.
 
 `tab:AddSection(title)` is an alias for `tab:CreateSection(title)`. Each control also has an `Add...` alias: for example, `section:AddToggle(...)` equals `section:CreateToggle(...)`.
 
@@ -260,7 +262,7 @@ color:Set(Color3.fromRGB(160, 120, 240))
 color:SetTransparency(0.5)
 ```
 
-Click the control to expand the picker. Drag in the shade square to set saturation and value, use **HUE** to choose a color, **BRIGHTNESS** to blend it toward white or black, and **TRANSPARENCY** to choose a value from 0 (opaque) to 1 (invisible). The header shows the current hex color. Enter a six-digit hex value in the **HEX** field (or a three-digit shorthand and leave the field). `Set` changes the `Color3` without changing transparency. Read `color.Transparency` or call `color:SetTransparency(value)`. `Callback` and `OnChanged` receive the `Color3` and transparency whenever either value changes.
+Click the control to expand the picker. Drag in the shade square to set saturation and value, use **HUE** to choose a color, **BRIGHTNESS** to blend it toward white or black, and **TRANSPARENCY** to choose a value from 0 (opaque) to 1 (invisible). The header shows the current hex color. Enter a six-digit hex value in the **HEX** field (or a three-digit shorthand and leave the field). `Set` changes the `Color3` without changing transparency. Read `color.Transparency` or call `color:SetTransparency(value)`. `Callback` and `OnChanged` receive the `Color3` and transparency whenever either value changes. Double-click the **BRIGHTNESS** track to snap back to the pure color. Pass `Open = true` to start expanded, or call `color:SetOpen(true/false)` / `color:Toggle()`; `color.Open` tells you the current state.
 
 ### Labels, paragraphs, and dividers
 

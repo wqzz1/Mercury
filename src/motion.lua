@@ -2614,7 +2614,7 @@ end
 -- bubble's. Each renders in a small window that includes the panel edge it grows
 -- from, faded into the panel at the window border so the rim stays continuous.
 do
- local MAX,WINDOW,MARGIN,FADE=5,208,40,10
+ local MAX,WINDOW,MARGIN,FADE=8,208,40,10
  local drops={}
  local nextSpawn=1.5
  local outline,outlineKey={},nil
@@ -2638,9 +2638,9 @@ do
    local arc=rand(0,L)
    local x,y=outlineAt(arc,w,h,r)
    local clear=not (x>w-60 and y>h-60)
-   for _,d in ipairs(drops) do local gap=math.abs((d.arc-arc+L/2)%L-L/2);if gap<140 then clear=false end end
+   for _,d in ipairs(drops) do local gap=math.abs((d.arc-arc+L/2)%L-L/2);if gap<95 then clear=false end end
    if clear then
-    drops[#drops+1]={slot=slot(),start=clock,bud=rand(.7,1.1),float=rand(1.4,3.6),back=rand(1.6,2.6),arc=arc,out=rand(.7,1.15)*REF_R,r=rand(8.5,12.5),speed=rand(.25,.7)*REF_R*(rand(0,1)<.5 and -1 or 1),bob=rand(.6,1.4),phase=rand(0,2*pi),split=rand(0,1)<.4,splitSpin=rand(2.5,4.5)}
+    drops[#drops+1]={slot=slot(),start=clock,bud=rand(.7,1.1),float=rand(1.4,3.6),back=rand(1.6,2.6),arc=arc,out=rand(.7,1.15)*REF_R,r=rand(8.5,11.5),speed=rand(.25,.7)*REF_R*(rand(0,1)<.5 and -1 or 1),bob=rand(.6,1.4),phase=rand(0,2*pi),split=rand(0,1)<.4,splitSpin=rand(2.5,4.5)}
     return
    end
   end
@@ -2687,7 +2687,7 @@ do
     local count=120
     for i=1,count do local x,y=outlineAt((i-1)/count*L,w,h,r);outline[i]={x,y} end
    end
-   if clock>=nextSpawn then if #drops<MAX then spawn(w,h,r,L) end;nextSpawn=clock+rand(1.2,3.2) end
+   if clock>=nextSpawn then if #drops<MAX then spawn(w,h,r,L) end;nextSpawn=clock+rand(.55,1.6) end
    for i=#drops,1,-1 do
     local d=drops[i];local t=clock-d.start
     if t>=d.bud+d.float+d.back then d.slot.label.Visible=false;pool[#pool+1]=d.slot;table.remove(drops,i) else
