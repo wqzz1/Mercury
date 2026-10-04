@@ -410,6 +410,7 @@ local function addColorPicker(container, config)
     local swatch = create("Frame", {Name = "Fill", BorderSizePixel = 0, Size = UDim2.fromScale(1, 1),
         ZIndex = 6, Parent = bead})
     corner(swatch, UDim.new(0.5, 0))
+    swatch:SetAttribute("MercuryKeep", true)
     local depth
     if art then
         depth = create("ImageLabel", {Name = "Gloss", BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1),
@@ -425,7 +426,7 @@ local function addColorPicker(container, config)
     if beadRim then
         local k = Layout.uiScale
         local s, mg = beadRim.side, beadRim.margin
-        create("ImageLabel", {Name = "LiquidRim", BackgroundTransparency = 1,
+        create("ImageLabel", {Name = "LiquidRim", BackgroundTransparency = 1, ImageColor3 = Theme.mist,
             ImageContent = Content.fromObject(beadRim.image), ScaleType = Enum.ScaleType.Slice,
             SliceCenter = Rect.new(s / 2 - 1, s / 2 - 1, s / 2 + 1, s / 2 + 1), SliceScale = 1 / k,
             Position = UDim2.fromOffset(-mg / k, -mg / k), Size = UDim2.new(1, 2 * mg / k, 1, 2 * mg / k),
@@ -433,7 +434,7 @@ local function addColorPicker(container, config)
     else
         specularRim(depth, 1, 0.2)
     end
-    local wobbling, beadShown = false, false
+    local wobbling, beadShown, holdWobble = false, false, false
     local function wobble()
         if not beadShown then beadShown = true; return end -- no wobble for the first colour
         if wobbling then return end
@@ -484,7 +485,9 @@ local function addColorPicker(container, config)
             end
             layer(art.knobBase, "Rim", z + 1)
             layer(art.knobWell, "Well", z + 2).ImageColor3 = Theme.tint
-            return holder, layer(art.knobFill, "Knob", z + 3)
+            local fill = layer(art.knobFill, "Knob", z + 3)
+            fill:SetAttribute("MercuryKeep", true)
+            return holder, fill
         end
         local holder = create("Frame", {Name = "KnobShadow", AnchorPoint = Vector2.new(0.5, 0.5),
             BackgroundColor3 = Color3.new(0, 0, 0), BackgroundTransparency = 0.72, BorderSizePixel = 0,
@@ -503,6 +506,7 @@ local function addColorPicker(container, config)
         corner(fill, UDim.new(0.5, 0))
         return holder, fill
     end
+    shade:SetAttribute("MercuryKeep", true)
     local shadeKnobHolder, shadeKnob = makeKnob(shade, KNOB, 7)
     local function paintKnob(knob, color, transparency)
         if knob:IsA("ImageLabel") then knob.ImageColor3 = color; knob.ImageTransparency = transparency or 0
@@ -545,6 +549,7 @@ local function addColorPicker(container, config)
     -- brightness, top to bottom: white, the pure colour (middle), black
     local brightBar, brightHit, brightKnobHolder, brightKnob = track("B", 2)
     brightBar.BackgroundColor3 = Color3.new(1, 1, 1)
+    brightBar:SetAttribute("MercuryKeep", true)
     local brightGradient = create("UIGradient", {Rotation = 90, Parent = brightBar})
 
     -- transparency, top to bottom: opaque to clear
@@ -554,6 +559,7 @@ local function addColorPicker(container, config)
     local alphaFill = create("Frame", {Name = "Fill", BorderSizePixel = 0, Size = UDim2.fromScale(1, 1),
         ZIndex = 5, Parent = alphaBar})
     corner(alphaFill, UDim.new(0.5, 0))
+    alphaFill:SetAttribute("MercuryKeep", true)
     create("UIGradient", {Rotation = 90, Transparency = NumberSequence.new(0, 1), Parent = alphaFill})
 
     -- HEX row (full width under the square): caption, field, transparency value
@@ -616,7 +622,7 @@ local function addColorPicker(container, config)
         paintKnob(alphaKnob, color, obj.Transparency)
         alphaKnobHolder.Position = along(obj.Transparency)
         alphaValue.Text = string.format("%d%%", math.round(obj.Transparency * 100))
-        if swatch.BackgroundColor3 ~= color then swatch.BackgroundColor3 = color; wobble() end
+        if swatch.BackgroundColor3 ~= color then swatch.BackgroundColor3 = color; if not holdWobble then wobble() end end
         swatch.BackgroundTransparency = obj.Transparency * 0.8
         hexValue.Text = hexOf(color)
         if not editingHex then hexBox.Text = string.sub(hexValue.Text, 2) end
@@ -697,6 +703,7 @@ local function addColorPicker(container, config)
         obj:Bind(part[1].InputBegan:Connect(function(input)
             if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
                 dragging = part[2]
+                wobble(); holdWobble = true -- one wobble as the drag starts, none while sliding
                 fromPointer(dragging, input.Position)
             end
         end))
@@ -714,7 +721,7 @@ local function addColorPicker(container, config)
         end
     end))
     obj:Bind(UserInputService.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then dragging = nil end
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then dragging = nil; holdWobble = false end
     end))
 
     local function parseHex(text)
@@ -812,11 +819,18 @@ function window:CreateTab(name, icon)
             elseif x <= 0.57 then return 1
             else return 1 - smooth((x - 0.57) / 0.06) end
         end
-        for _, x in {0, 0.08, 0.14, 0.2, 0.26, 0.32, 0.37, 0.40, 0.425, 0.45, 0.57, 0.6, 0.63, 1} do
-            table.insert(glintKeys, ColorSequenceKeypoint.new(x, Theme.mist:Lerp(Color3.fromRGB(26, 20, 42), 0.13):Lerp(Color3.new(1, 1, 1), glintAt(x))))
+        local function glintColors()
+            table.clear(glintKeys)
+            for _, x in {0, 0.08, 0.14, 0.2, 0.26, 0.32, 0.37, 0.40, 0.425, 0.45, 0.57, 0.6, 0.63, 1} do
+                table.insert(glintKeys, ColorSequenceKeypoint.new(x, Theme.mist:Lerp(Theme.bruise, 0.13):Lerp(Color3.new(1, 1, 1), glintAt(x))))
+            end
+            return ColorSequence.new(glintKeys)
         end
         local glint = create("UIGradient", {Rotation = 20, Offset = Vector2.new(-1.2, 0),
-            Color = ColorSequence.new(glintKeys), Parent = heading})
+            Color = glintColors(), Parent = heading})
+        -- the title's resting tint follows the theme
+        Resize.themeHooks = Resize.themeHooks or {}
+        table.insert(Resize.themeHooks, function() if glint.Parent then glint.Color = glintColors() end end)
         task.spawn(function()
             local glintRng = Random.new()
             task.wait(glintRng:NextNumber(0.4, 1.2))
@@ -911,6 +925,80 @@ function window:CreateTab(name, icon)
 end
 window.AddTab = window.CreateTab
 window.SettingsTab = window:CreateTab("Settings", "settings")
+
+-- Themes ---------------------------------------------------------------------
+-- window:SetTheme("Red") or a table of role colours ({Accent = ..., Text = ...},
+-- role names in config.lua). Every colour in the window is matched by value to
+-- its role and swapped; the liquid marble and rim light rebuild from the new
+-- colours. Colours that belong to the user (colour picker values) are kept.
+window.Themes = table.clone(ThemeOrder)
+window.Theme = "Default"
+local function colorKey(c: Color3): number
+    return math.round(c.R * 255) * 65536 + math.round(c.G * 255) * 256 + math.round(c.B * 255)
+end
+function window:SetTheme(theme)
+    local palette = themePalette(theme)
+    local map = {}
+    for _, role in ThemeRoles do map[colorKey(Theme[role.key])] = palette[role.key] end
+    local function keep(o) return o:GetAttribute("MercuryKeep") or (o.Parent ~= nil and o.Parent:GetAttribute("MercuryKeep")) end
+    for _, o in screenGui:GetDescendants() do
+        if keep(o) then continue end
+        if o:IsA("GuiObject") then
+            local n = map[colorKey(o.BackgroundColor3)]; if n then o.BackgroundColor3 = n end
+            if o:IsA("TextLabel") or o:IsA("TextButton") or o:IsA("TextBox") then
+                n = map[colorKey(o.TextColor3)]; if n then o.TextColor3 = n end
+                if o:IsA("TextBox") then n = map[colorKey(o.PlaceholderColor3)]; if n then o.PlaceholderColor3 = n end end
+            elseif o:IsA("ImageLabel") or o:IsA("ImageButton") then
+                n = map[colorKey(o.ImageColor3)]; if n then o.ImageColor3 = n end
+            end
+        elseif o:IsA("UIStroke") then
+            local n = map[colorKey(o.Color)]; if n then o.Color = n end
+        elseif o:IsA("UIGradient") then
+            local keys, changed = {}, false
+            for i, point in o.Color.Keypoints do
+                local n = map[colorKey(point.Value)]
+                if n then changed = true end
+                keys[i] = ColorSequenceKeypoint.new(point.Time, n or point.Value)
+            end
+            if changed then o.Color = ColorSequence.new(keys) end
+        end
+    end
+    for key, value in palette do Theme[key] = value end
+    for _, hook in Resize.themeHooks or {} do task.spawn(hook, Theme) end
+    if Resize.recolorMaterial then pcall(Resize.recolorMaterial) end
+    self.Theme = if typeof(theme) == "string" and ThemeTints[theme] then theme elseif typeof(theme) == "table" then "Custom" else "Default"
+    return self
+end
+local THEME_FILE = "Mercury/Theme.txt"
+local function savedTheme(): string?
+    local ok, value = pcall(function()
+        if typeof(executorEnv.isfile) == "function" and executorEnv.isfile(THEME_FILE) then return executorEnv.readfile(THEME_FILE) end
+        return nil
+    end)
+    if ok and typeof(value) == "string" and table.find(ThemeOrder, value) then return value end
+    return nil
+end
+local function saveTheme(name: string)
+    pcall(function()
+        if typeof(executorEnv.writefile) ~= "function" then return end
+        if typeof(executorEnv.isfolder) == "function" and not executorEnv.isfolder("Mercury") and typeof(executorEnv.makefolder) == "function" then executorEnv.makefolder("Mercury") end
+        executorEnv.writefile(THEME_FILE, name)
+    end)
+end
+local initialTheme = if typeof(options.Theme) == "string" and table.find(ThemeOrder, options.Theme) then options.Theme
+    elseif typeof(options.Theme) == "table" then nil else savedTheme()
+do
+    local appearance = window.SettingsTab:CreateSection("Appearance")
+    window.ThemeDropdown = appearance:CreateDropdown({
+        Name = "Theme",
+        Options = table.clone(ThemeOrder),
+        CurrentValue = initialTheme or "Default",
+        Callback = function(name)
+            window:SetTheme(name)
+            saveTheme(name)
+        end,
+    })
+end
 window.Attributes = {}
 function window:SetAttribute(key, value) self.Attributes[key] = value; screenGui:SetAttribute(key, value); return self end
 function window:GetAttribute(key) return self.Attributes[key] end
@@ -971,5 +1059,7 @@ do
         end)
     end
 end
+if typeof(options.Theme) == "table" then window:SetTheme(options.Theme)
+elseif initialTheme and initialTheme ~= "Default" then window:SetTheme(initialTheme) end
 task.defer(function() if not state.destroyed then open() end end)
 return window

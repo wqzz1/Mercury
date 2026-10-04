@@ -8,9 +8,76 @@ local Theme = {
     plum = Color3.fromRGB(50, 28, 86),
     knob = Color3.fromRGB(234, 226, 250),
     danger = Color3.fromRGB(255, 138, 156),
+    ink = Color3.fromRGB(7, 7, 10),
+    graphite = Color3.fromRGB(22, 21, 27),
+    bruise = Color3.fromRGB(28, 20, 42),
+    smoke = Color3.fromRGB(66, 63, 76),
+    lava = Color3.fromRGB(150, 90, 240),
+    lavaDeep = Color3.fromRGB(90, 46, 150),
 
     fontFamily = "rbxasset://fonts/families/BuilderSans.json",
 }
+
+-- Colour roles. Every colour Mercury draws comes from one of these, so a theme
+-- is one value per role. `name` is the public name (used by window:SetTheme with
+-- a custom table); `key` is the field in Theme the code reads.
+local ThemeRoles = {
+    {name = "Surface", key = "tint"},           -- dark glass fill: wells, lists, tracks, hex field
+    {name = "Text", key = "mist"},              -- titles, labels, icons; also the liquid rim light
+    {name = "SubText", key = "mistDim"},        -- descriptions, captions, values, inactive icons
+    {name = "Highlight", key = "spec"},         -- specular glints, sheens, divider shine
+    {name = "Glow", key = "lilac"},             -- soft accent: glows, hover rims, gradient ends
+    {name = "Accent", key = "violet"},          -- main accent: active tab, fills, toggles on
+    {name = "AccentDeep", key = "plum"},        -- deep accent: background orbs, shadows
+    {name = "Knob", key = "knob"},              -- slider and toggle knobs
+    {name = "Danger", key = "danger", fixed = true}, -- errors and destructive actions
+    {name = "Background", key = "ink"},         -- marble background, darkest tone
+    {name = "BackgroundMid", key = "graphite"}, -- marble background, middle tone
+    {name = "BackgroundTint", key = "bruise"},  -- marble background, accent-tinted tone
+    {name = "Vein", key = "smoke"},             -- marble veins
+    {name = "Swirl", key = "lava"},             -- marble swirl, bright layer
+    {name = "SwirlDeep", key = "lavaDeep"},     -- marble swirl, deep layer
+}
+-- Built-in themes: the default palette moved to one hue (sat/value scale it).
+local ThemeOrder = {"Default", "Mono", "Red", "Orange", "Hot Orange", "Green", "Turquoise", "Hot Pink"}
+local ThemeTints = {
+    Mono = {sat = 0},
+    Red = {hue = 0.988, sat = 1.05},
+    Orange = {hue = 0.075, sat = 1.05},
+    ["Hot Orange"] = {hue = 0.045, sat = 1.3, value = 1.06},
+    Green = {hue = 0.37},
+    Turquoise = {hue = 0.475},
+    ["Hot Pink"] = {hue = 0.915, sat = 1.25, value = 1.04},
+}
+local DefaultPalette = {}
+for _, role in ThemeRoles do DefaultPalette[role.key] = Theme[role.key] end
+local function themePalette(theme): {[string]: Color3}
+    local palette = table.clone(DefaultPalette)
+    if typeof(theme) == "table" then
+        for _, role in ThemeRoles do
+            local value = theme[role.name] or theme[role.key]
+            if typeof(value) == "Color3" then palette[role.key] = value end
+        end
+    elseif ThemeTints[theme] then
+        local tint = ThemeTints[theme]
+        for _, role in ThemeRoles do
+            if not role.fixed then
+                local h, s, v = DefaultPalette[role.key]:ToHSV()
+                palette[role.key] = Color3.fromHSV(tint.hue or h, math.clamp(s * (tint.sat or 1), 0, 1), math.clamp(v * (tint.value or 1), 0, 1))
+            end
+        end
+    end
+    -- whole 0-255 values, and no two roles equal (colours are matched by value)
+    local used = {}
+    for _, role in ThemeRoles do
+        local c = palette[role.key]
+        local r, g, b = math.round(c.R * 255), math.round(c.G * 255), math.round(c.B * 255)
+        while used[r * 65536 + g * 256 + b] do b = if b > 0 then b - 1 else b + 1 end
+        used[r * 65536 + g * 256 + b] = true
+        palette[role.key] = Color3.fromRGB(r, g, b)
+    end
+    return palette
+end
 
 local Layout = {
     uiScale = 0.94,        -- overall size of the panel (1 = full size)
@@ -77,9 +144,9 @@ local Lava = {
     tile = 160,
     window = 105,           -- texture rows shown across the panel; smaller = bigger, sparser swirls
     layers = {
-        { color = Color3.fromRGB(150, 90, 240), transparency = 0.64,
+        { color = Theme.lava, transparency = 0.64,
           velocity = Vector2.new(1.6, 1.1), origin = Vector2.new(0, 0) },
-        { color = Color3.fromRGB(90, 46, 150), transparency = 0.8,
+        { color = Theme.lavaDeep, transparency = 0.8,
           velocity = Vector2.new(-1.2, 1.5), origin = Vector2.new(70, 40) },
     },
 }

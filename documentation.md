@@ -10,6 +10,7 @@ Mercury is a single-file Roblox Luau UI library. It provides the liquid glass wi
 - [Controls](#controls)
 - [Control objects and callbacks](#control-objects-and-callbacks)
 - [Icons](#icons)
+- [Themes](#themes)
 - [Notifications and lifecycle](#notifications-and-lifecycle)
 - [Connecting your own features](#connecting-your-own-features)
 - [Source and rebuilding](#source-and-rebuilding)
@@ -318,6 +319,49 @@ This bundle includes a small white icon set. Pass a name to `CreateTab(name, ico
 For the minimized bubble, `MinimizedIcon` is separate from the tab/button icon set. It accepts a Roblox asset ID or supported executor asset path. Omit it to keep the animated default logo.
 
 Icon names come from [Lucide](https://lucide.dev/icons/) and the bundled atlas metadata comes from [Rayfield's icon atlas](https://github.com/SiriusSoftwareLtd/Rayfield/blob/main/icons.lua). License texts are in [LICENSES](./LICENSES).
+
+## Themes
+
+The Settings tab has an **Appearance → Theme** dropdown. The choice is saved to
+`Mercury/Theme.txt` in the executor workspace (when the executor has file
+functions) and comes back the next time a Mercury window opens.
+
+Built-in themes: `Default`, `Mono`, `Red`, `Orange`, `Hot Orange`, `Green`,
+`Turquoise`, `Hot Pink`.
+
+```lua
+local window = Mercury:CreateWindow({Name = "My Script", Theme = "Turquoise"})
+window:SetTheme("Hot Pink")      -- switch at any time
+print(window.Theme, window.Themes) -- current name, list of built-in names
+```
+
+Every colour Mercury draws belongs to one role. A custom theme is a table of
+role colours; roles you leave out keep their default.
+
+| Role | What it colours |
+| --- | --- |
+| `Text` | Titles, labels, icons, and the liquid rim light |
+| `SubText` | Descriptions, captions, values, inactive icons |
+| `Accent` | Main accent: active tab, fills, toggles that are on |
+| `AccentDeep` | Deep accent: background orbs and shadows |
+| `Glow` | Soft accent: glows, hover rims, gradient ends |
+| `Highlight` | Specular glints, sheens, divider shine |
+| `Surface` | Dark glass fill: wells, dropdown lists, tracks, hex field |
+| `Knob` | Slider and toggle knobs |
+| `Danger` | Errors and destructive actions |
+| `Background`, `BackgroundMid`, `BackgroundTint` | The marble background's base tones |
+| `Vein` | Marble veins |
+| `Swirl`, `SwirlDeep` | The marble's two swirl layers |
+
+```lua
+window:SetTheme({
+    Accent = Color3.fromRGB(80, 200, 120),
+    Glow = Color3.fromRGB(170, 240, 190),
+    Text = Color3.fromRGB(230, 245, 235),
+})
+```
+
+Colours you pick in a color picker are never changed by a theme.
 
 ## Notifications and lifecycle
 

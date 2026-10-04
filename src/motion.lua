@@ -539,20 +539,23 @@ local material=(function()
  -- sprite (the exact maths of that ring stack), shown in the real panel in place
  -- of its rings and used by the liquid too, so every surface shows the same glow.
  local orbSprites={}
+ local function orbPixels(orb,size,D)
+  local c=size/2;local n=orb.rings;local keep=1-orb.alpha
+  local rgb=byte(orb.color.R)+byte(orb.color.G)*256+byte(orb.color.B)*65536
+  local buf=buffer.create(size*size*4)
+  for y=0,size-1 do for x=0,size-1 do
+   -- rings at scale 1-(j-1)/n*.92 cover this pixel: a count linear in radius
+   local d=sqrt((x+.5-c)^2+(y+.5-c)^2);local count=clamp((1-2*d/D)*n/.92+.5,0,n)
+   if count>0 then writeu32(buf,(y*size+x)*4,rgb+round((1-keep^(count/n))*255)*16777216) end
+  end end
+  return buf
+ end
  do
   local k=Layout.uiScale
   for i,orb in ipairs(orbData) do
-   local D=orb.frame.Size.X.Offset*k;local size=ceil(D)+2;local c=size/2;local n=orb.rings
-   local keep=1-orb.alpha
-   local rgb=byte(orb.color.R)+byte(orb.color.G)*256+byte(orb.color.B)*65536
-   local buf=buffer.create(size*size*4)
-   for y=0,size-1 do for x=0,size-1 do
-    -- rings at scale 1-(j-1)/n*.92 cover this pixel: a count linear in radius
-    local d=sqrt((x+.5-c)^2+(y+.5-c)^2);local count=clamp((1-2*d/D)*n/.92+.5,0,n)
-    if count>0 then writeu32(buf,(y*size+x)*4,rgb+round((1-keep^(count/n))*255)*16777216) end
-   end end
-   local image=newImage(size,size);image:WritePixelsBuffer(Vector2.zero,Vector2.new(size,size),buf)
-   orbSprites[i]={image=image,size=size}
+   local D=orb.frame.Size.X.Offset*k;local size=ceil(D)+2
+   local image=newImage(size,size);image:WritePixelsBuffer(Vector2.zero,Vector2.new(size,size),orbPixels(orb,size,D))
+   orbSprites[i]={image=image,size=size,D=D}
    for _,ring in ipairs(orb.frame:GetChildren()) do if ring:IsA('GuiObject') then ring.Visible=false end end
    local label=create('ImageLabel',{Name='OrbSprite',BackgroundTransparency=1,AnchorPoint=Vector2.new(.5,.5),Position=UDim2.fromScale(.5,.5),Size=UDim2.fromOffset(size/k,size/k),ImageContent=Content.fromObject(image),Parent=orb.frame})
    passThrough(label)
@@ -863,7 +866,7 @@ local material=(function()
   local lr,lg,lb={},{},{}
   for i=0,1023 do local c=baseGradient and seqColor(baseGradient.Color,i/1023) or Theme.tint;lr[i],lg[i],lb[i]=byte(c.R),byte(c.G),byte(c.B) end
   local angle=math.rad(baseGradient and baseGradient.Rotation or 0);local cb,sb=cos(angle),sin(angle)
-  local ir,ig,ib=byte(INK.R),byte(INK.G),byte(INK.B)
+  local ink=Theme.ink or INK;local ir,ig,ib=byte(ink.R),byte(ink.G),byte(ink.B)
   local slice=os.clock()
   for j=0,BH-1 do
    local py=j-MARGIN+.5;local v=clamp(py/Hp,0,1);local dy=max(0,-py,py-Hp)
@@ -929,6 +932,22 @@ local material=(function()
  local function panelSize() return Vector2.new(root.Size.X.Offset,root.Size.Y.Offset)*Layout.uiScale end
  m.panelSize=panelSize
  local function matches(set,size) return set~=nil and set.textured==(texture~=nil) and math.abs(set.w-size.X)<.5 and math.abs(set.h-size.Y)<.5 end
+ -- A theme change recolours the backdrop instances; read their colours again,
+ -- re-bake the orb glows in place and rebuild the per-size layers.
+ function m.recolor()
+  for i,orb in ipairs(orbData) do
+   local ring=orb.frame:FindFirstChildWhichIsA('Frame')
+   if ring then orb.color=ring.BackgroundColor3 end
+   local sprite=orbSprites[i]
+   if sprite then sprite.image:WritePixelsBuffer(Vector2.zero,Vector2.new(sprite.size,sprite.size),orbPixels(orb,sprite.size,sprite.D)) end
+  end
+  for _,vein in ipairs(veinData) do local c=vein.frame.BackgroundColor3;vein.rgb=byte(c.R)+byte(c.G)*256+byte(c.B)*65536 end
+  for _,layer in ipairs(topLayers) do layer.color=layer.instance.BackgroundColor3 end
+  local old=assets;assets=nil
+  if old then task.delay(1,release,old) end
+  m.invalidateSheet()
+ end
+ Resize.recolorMaterial=m.recolor
  function m.prepare(size)
   if matches(assets,size) then return end
   local old=assets;assets=build(size.X,size.Y,false);release(old)
@@ -1222,6 +1241,8 @@ end end
 -- Rim light colour. The liquid blends toward it by `shine`; the open panel's rim
 -- overlay uses the same colour with alpha = shine, so both produce equal pixels.
 local RIM_R,RIM_G,RIM_B=226,214,246
+Resize.themeHooks=Resize.themeHooks or {}
+table.insert(Resize.themeHooks,function(T) local c=T.mist;RIM_R,RIM_G,RIM_B=math.round(c.R*255),math.round(c.G*255),math.round(c.B*255) end)
 local rimMode=false
 -- Material source for this render: buffer `mat` of matW x matH pixels whose
 -- origin sits at (matX, matY) in output pixels. Outside it the liquid is ink.
@@ -1394,7 +1415,7 @@ local function shadeCells(iy,ix,endX,mat,phase)
         local shine=rimLookup[key]*(.18+.82*light)*.8+broadLookup[key]*light;if shine>1 then shine=1 end
         local off=(y*OW+x)*4
         if rimMode then
-         write(pixels,off,RIM_R+RIM_G*256+RIM_B*65536+floor(alpha*shine*255+.5)*16777216)
+         write(pixels,off,16777215+floor(alpha*shine*255+.5)*16777216)
         elseif mat then
          local mx,my=x-matX,y-matY
          if mx<0 or my<0 or mx>=matW or my>=matH then mx,my=mirror(mx,matW),mirror(my,matH) end
@@ -1617,7 +1638,7 @@ do
  end
  local contourRadius=nil
  if panelRim then
-  local label=create('ImageLabel',{Name='LiquidRim',BackgroundTransparency=1,ImageContent=Content.fromObject(panelRim),ScaleType=Enum.ScaleType.Slice,SliceCenter=Rect.new(side/2-1,side/2-1,side/2+1,side/2+1),SliceScale=1/k,Position=UDim2.fromOffset(-margin/k,-margin/k),Size=UDim2.new(1,2*margin/k,1,2*margin/k),ZIndex=2,Parent=backdrop})
+  local label=create('ImageLabel',{Name='LiquidRim',BackgroundTransparency=1,ImageColor3=Theme.mist,ImageContent=Content.fromObject(panelRim),ScaleType=Enum.ScaleType.Slice,SliceCenter=Rect.new(side/2-1,side/2-1,side/2+1,side/2+1),SliceScale=1/k,Position=UDim2.fromOffset(-margin/k,-margin/k),Size=UDim2.new(1,2*margin/k,1,2*margin/k),ZIndex=2,Parent=backdrop})
   passThrough(label)
   for _,name in ipairs({'Lens','Rim'}) do local item=panel:FindFirstChild(name);if item then item.Visible=false end end
  else warn('[LiquidIntegration] panel rim unavailable',err) end
@@ -1693,7 +1714,7 @@ end
 if toastRim and toast then
  local s,mg=toastRim.side,toastRim.margin
  local k=Layout.uiScale
- local rimLabel=create('ImageLabel',{Name='LiquidRim',BackgroundTransparency=1,ImageContent=Content.fromObject(toastRim.image),ScaleType=Enum.ScaleType.Slice,SliceCenter=Rect.new(s/2-1,s/2-1,s/2+1,s/2+1),SliceScale=1/k,Position=UDim2.fromOffset(-mg/k,-mg/k),Size=UDim2.new(1,2*mg/k,1,2*mg/k),ZIndex=10,Parent=toast})
+ local rimLabel=create('ImageLabel',{Name='LiquidRim',BackgroundTransparency=1,ImageColor3=Theme.mist,ImageContent=Content.fromObject(toastRim.image),ScaleType=Enum.ScaleType.Slice,SliceCenter=Rect.new(s/2-1,s/2-1,s/2+1,s/2+1),SliceScale=1/k,Position=UDim2.fromOffset(-mg/k,-mg/k),Size=UDim2.new(1,2*mg/k,1,2*mg/k),ZIndex=10,Parent=toast})
  passThrough(rimLabel)
  table.insert(toastFade,{instance=rimLabel,property='ImageTransparency',base=0})
  for _,child in ipairs(toast:GetChildren()) do if child:IsA('UIStroke') then child:Destroy() end end
@@ -2224,6 +2245,8 @@ end end
 -- Rim light colour. The liquid blends toward it by `shine`; the open panel's rim
 -- overlay uses the same colour with alpha = shine, so both produce equal pixels.
 local RIM_R,RIM_G,RIM_B=226,214,246
+Resize.themeHooks=Resize.themeHooks or {}
+table.insert(Resize.themeHooks,function(T) local c=T.mist;RIM_R,RIM_G,RIM_B=math.round(c.R*255),math.round(c.G*255),math.round(c.B*255) end)
 local rimMode=false
 -- Material source for this render: buffer `mat` of matW x matH pixels whose
 -- origin sits at (matX, matY) in output pixels. Outside it the liquid is ink.
@@ -2396,7 +2419,7 @@ local function shadeCells(iy,ix,endX,mat,phase)
         local shine=rimLookup[key]*(.18+.82*light)*.8+broadLookup[key]*light;if shine>1 then shine=1 end
         local off=(y*OW+x)*4
         if rimMode then
-         write(pixels,off,RIM_R+RIM_G*256+RIM_B*65536+floor(alpha*shine*255+.5)*16777216)
+         write(pixels,off,16777215+floor(alpha*shine*255+.5)*16777216)
         elseif mat then
          local mx,my=x-matX,y-matY
          if mx<0 or my<0 or mx>=matW or my>=matH then mx,my=mirror(mx,matW),mirror(my,matH) end
@@ -3249,6 +3272,7 @@ local function sdRR(x,y,x0,y0,x1,y1,r)
 end
 local y0,y1=floor(H*(part-1)/parts),floor(H*part/parts)
 ch.Event:Connect(function(tag,fid,ox,oy,w,h,r,dir,ex,g,cardScale,pos,n,mat)
+ if tag=='rim' then RIM_R,RIM_G,RIM_B=fid,ox,oy;return end
  if tag~='tick' then return end
  task.desynchronize()
  -- field on a 2 px grid: the panel itself, the settling card, the particles
@@ -3395,6 +3419,9 @@ ch:Fire('ready')
    run(actors[1],SIM_SRC,simId)
    run(actors[2],RENDER_SRC,drawId,1,2,W_,H_)
    run(actors[3],RENDER_SRC,drawId,2,2,W_,H_)
+   local function sendRim(T) local c=T.mist;drawCh:Fire('rim',math.round(c.R*255),math.round(c.G*255),math.round(c.B*255)) end
+   Resize.themeHooks=Resize.themeHooks or {};table.insert(Resize.themeHooks,sendRim)
+   task.delay(.5,sendRim,Theme)
    image=AS:CreateEditableImage({Size=Vector2.new(W_,H_)})
    label=create('ImageLabel',{Name='ToastMorph',BackgroundTransparency=1,Size=UDim2.fromOffset(W_/k,H_/k),ImageContent=Content.fromObject(image),ZIndex=1,Visible=false,Parent=panel})
    passThrough(label)
