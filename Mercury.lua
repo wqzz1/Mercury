@@ -5225,7 +5225,7 @@ local function substep(sim,dt)
  local n=#xs;if n==0 then return end
  local h=FL.h;local g=sim.g
  local grid=buildGrid(xs,ys,h)
- if sim.suck then for i=1,n do vx[i]-=.5*dt;if xs[i]<g.gap+16 then vy[i]+=(g.cy-ys[i])*.025*dt end end end
+ if sim.suck then for i=1,n do local e=(ys[i]-g.cy)/(g.ch/2);vx[i]-=.5*dt*(1+.9*e*e);if xs[i]<g.gap+16 then vy[i]+=(g.cy-ys[i])*.025*dt end end end
  for i=1,n do
   local cx,cy=floor(xs[i]/h),floor(ys[i]/h)
   for oy=-1,1 do for ox=-1,1 do local cell=grid[cx+ox+(cy+oy)*4096]
@@ -5303,7 +5303,8 @@ local function fullSim(g)
   local x=g.gap+3.3+(row%2)*d/2
   while x<g.gap+g.cw-2 do
    if sdRound(x,y,g.gap,g.cy-g.ch/2,g.gap+g.cw,g.cy+g.ch/2,g.rad)<-2.5 then
-    local i=#sim.xs+1;sim.xs[i]=x;sim.ys[i]=y;sim.vx[i]=0;sim.vy[i]=0;sim.px[i]=x;sim.py[i]=y end
+    local jx,jy=x+rand(-1.2,1.2),y+rand(-1.2,1.2)
+    local i=#sim.xs+1;sim.xs[i]=jx;sim.ys[i]=jy;sim.vx[i]=0;sim.vy[i]=0;sim.px[i]=jx;sim.py[i]=jy end
    x+=d
   end
   y+=d*.866;row+=1
@@ -5376,9 +5377,9 @@ conn=ch.Event:Connect(function(tag,fid,ox,oy,w,h,r,dir,ex,g,cardScale,pos,n,mat,
   for i=0,FW-1 do
    local px=ox+i*2
    local f=0
-   if (dir>0 and px<w+4) or (dir<0 and px>-4) then f=clamp(.5-sdRR(px,py,0,0,w,h,r)/5,0,1.2) end
+   if (dir>0 and px<w+4) or (dir<0 and px>-4) then f=clamp(.5-sdRR(px,py,0,0,w,h,r)/5,0,6) end
    local c=0
-   if cardScale>0 and px>cx0-hw-4 and px<cx0+hw+4 then c=clamp(.5-sdRR(px,py,cx0-hw,g.cy-hh,cx0+hw,g.cy+hh,cr)/5,0,1.2) end
+   if cardScale>0 and px>cx0-hw-4 and px<cx0+hw+4 then c=clamp(.5-sdRR(px,py,cx0-hw,g.cy-hh,cx0+hw,g.cy+hh,cr)/5,0,6) end
    -- pf keeps the window's own share of the field, so its outline is never drawn
    -- cf keeps the card's share: only the window and the card wear the rim light
    if c>f then field[row+i+1]=c;pf[row+i+1]=0;cf[row+i+1]=c else field[row+i+1]=f;pf[row+i+1]=f;cf[row+i+1]=0 end
@@ -5418,7 +5419,7 @@ conn=ch.Event:Connect(function(tag,fid,ox,oy,w,h,r,dir,ex,g,cardScale,pos,n,mat,
    local i00=jy*FW+ix+1
    local a00,a10=field[i00],field[i00+1]
    local a01,a11=field[i00+FW],field[i00+FW+1]
-   if not (rimAmount and rimAmount>0) and a00>=1.2 and a10>=1.2 and a01>=1.2 and a11>=1.2 and pf[i00]==0 and pf[i00+1]==0 and pf[i00+FW]==0 and pf[i00+FW+1]==0 then
+   if not (rimAmount and rimAmount>0) and a00>=6 and a10>=6 and a01>=6 and a11>=6 and pf[i00]==0 and pf[i00+1]==0 and pf[i00+FW]==0 and pf[i00+FW+1]==0 then
     -- deep inside (flat plateau): no rim light, the marble shows as is
     local edge=min(min(x,W-1-x),min(y,H-1-y))
     local a=edge<22 and floor(edge/22*255+.5) or 255
@@ -5468,7 +5469,7 @@ conn=ch.Event:Connect(function(tag,fid,ox,oy,w,h,r,dir,ex,g,cardScale,pos,n,mat,
        local light=(gx*.6+gy*.8)/gl;if light<0 then light=0 elseif light>1 then light=1 end
        local dd=dist>0 and dist or 0
        local key=floor(dd*16);if key>1024 then key=1024 end
-       local ps=(RIM_NEAR[key]*(.18+.82*light)+RIM_BROAD[key]*light)*joined
+       local ps=RIM_NEAR[key]*(.18+.82*light)+RIM_BROAD[key]*light
        if ps>shine then shine=ps>1 and 1 or ps end
       end
      end
