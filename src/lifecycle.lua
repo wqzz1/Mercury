@@ -1,10 +1,17 @@
 local toastToken = 0
+local function sweepToastGlint(token: number)
+    toastGlintGradient.Offset = Vector2.new(-1.4, 0)
+    task.delay(0.2, function()
+        if token ~= toastToken or not toast.Parent then return end
+        tween(toastGlintGradient, 1.1, { Offset = Vector2.new(1.4, 0) }, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
+    end)
+end
 -- With the liquid morph the rendered card IS the notification's body, so the
 -- toast frame only carries the text; its own background is for the fallback.
 local function setToastChrome(on: boolean)
     for _, child in toast:GetChildren() do
         if child:IsA("UIStroke") then child.Enabled = on
-        elseif child:IsA("GuiObject") and not child:IsA("TextLabel") and child ~= toastBadge then child.Visible = on end
+        elseif child:IsA("GuiObject") and not child:IsA("TextLabel") and child ~= toastBadge and child ~= toastGlint then child.Visible = on end
     end
 end
 local function showToast(title: string, content: string?, duration: number?, kind: string?)
@@ -33,6 +40,7 @@ local function showToast(title: string, content: string?, duration: number?, kin
             if token ~= toastToken or not toast.Parent then return end
             toast.Visible = true
             playFade(toastFade, true, 0.25)
+            sweepToastGlint(token)
             task.delay(duration or 2.4, function()
                 if token ~= toastToken or not toast.Parent then return end
                 playFade(toastFade, false, 0.2)
@@ -48,6 +56,7 @@ local function showToast(title: string, content: string?, duration: number?, kin
     toast.Visible = true
     toast.Position = UDim2.new(startX, y)
     playFade(toastFade, true, 0.25)
+    sweepToastGlint(token)
     tween(toast, 0.45, { Position = UDim2.new(finalX, y) }, Enum.EasingStyle.Back)
 
     task.delay(duration or 2.4, function()

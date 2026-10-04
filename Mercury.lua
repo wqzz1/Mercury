@@ -1626,7 +1626,42 @@ local function setToastStatus(kind: string?)
     toastBadgeIcon.ImageRectOffset = Vector2.new(data[4], data[5])
     toastBadgeIcon.ImageColor3 = status.color
 end
+-- Glint: one soft streak sweeping across the card, slanted \ (up to the left,
+-- down to the right), with a faint eased trail. Clipped to the card's corners.
+local toastGlint = create("Frame", {
+    Name = "Glint",
+    BackgroundColor3 = Theme.spec,
+    BackgroundTransparency = 0,
+    BorderSizePixel = 0,
+    Size = UDim2.fromScale(1, 1),
+    ZIndex = 11,
+    Parent = toast,
+})
+corner(toastGlint, 18)
+local toastGlintKeys = {}
+do
+    local function smooth(a) a = math.clamp(a, 0, 1); return a * a * (3 - 2 * a) end
+    local function strength(x) -- 0..1 brightness across the band (moving right)
+        if x < 0.1 then return 0
+        elseif x < 0.42 then return 0.22 * ((x - 0.1) / 0.32) ^ 2.2
+        elseif x < 0.47 then return 0.22 + 0.78 * smooth((x - 0.42) / 0.05)
+        elseif x <= 0.53 then return 1
+        else return 1 - smooth((x - 0.53) / 0.07) end
+    end
+    for _, x in {0, 0.1, 0.18, 0.26, 0.34, 0.42, 0.445, 0.47, 0.53, 0.565, 0.6, 1} do
+        table.insert(toastGlintKeys, NumberSequenceKeypoint.new(x, 1 - 0.42 * strength(x)))
+    end
+end
+local toastGlintGradient = create("UIGradient", {
+    Rotation = -32,
+    Offset = Vector2.new(-1.4, 0),
+    Transparency = NumberSequence.new(toastGlintKeys),
+    Parent = toastGlint,
+})
 local toastFade = collectFade(toast)
+-- collectFade only knows background/text/stroke transparency; the badge's
+-- icon is an image, so add it explicitly or it lingers after the card is gone
+table.insert(toastFade, { instance = toastBadgeIcon, property = "ImageTransparency", base = 0 })
 
 -- Panel resizing state (grip, limits, and skeleton bones that depend on height)
 local Resize = {
@@ -5241,12 +5276,19 @@ end
 
 -- source: lifecycle.lua
 local toastToken = 0
+local function sweepToastGlint(token: number)
+    toastGlintGradient.Offset = Vector2.new(-1.4, 0)
+    task.delay(0.2, function()
+        if token ~= toastToken or not toast.Parent then return end
+        tween(toastGlintGradient, 1.1, { Offset = Vector2.new(1.4, 0) }, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
+    end)
+end
 -- With the liquid morph the rendered card IS the notification's body, so the
 -- toast frame only carries the text; its own background is for the fallback.
 local function setToastChrome(on: boolean)
     for _, child in toast:GetChildren() do
         if child:IsA("UIStroke") then child.Enabled = on
-        elseif child:IsA("GuiObject") and not child:IsA("TextLabel") and child ~= toastBadge then child.Visible = on end
+        elseif child:IsA("GuiObject") and not child:IsA("TextLabel") and child ~= toastBadge and child ~= toastGlint then child.Visible = on end
     end
 end
 local function showToast(title: string, content: string?, duration: number?, kind: string?)
@@ -5275,6 +5317,7 @@ local function showToast(title: string, content: string?, duration: number?, kin
             if token ~= toastToken or not toast.Parent then return end
             toast.Visible = true
             playFade(toastFade, true, 0.25)
+            sweepToastGlint(token)
             task.delay(duration or 2.4, function()
                 if token ~= toastToken or not toast.Parent then return end
                 playFade(toastFade, false, 0.2)
@@ -5290,6 +5333,7 @@ local function showToast(title: string, content: string?, duration: number?, kin
     toast.Visible = true
     toast.Position = UDim2.new(startX, y)
     playFade(toastFade, true, 0.25)
+    sweepToastGlint(token)
     tween(toast, 0.45, { Position = UDim2.new(finalX, y) }, Enum.EasingStyle.Back)
 
     task.delay(duration or 2.4, function()
