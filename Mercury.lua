@@ -3497,7 +3497,7 @@ do
    if image then image:WritePixelsBuffer(Vector2.zero,Vector2.new(eside,eside),pixels);return {image=image,side=eside,margin=cardMargin,radius=measured} end
   end
  end
- if ok then api.espRim=cardRim(14);toastRim=cardRim(18) end
+ if ok then api.espRim=cardRim(14);toastRim=cardRim(18);Resize.beadRim=cardRim(13) end
  W,H,OW,OH,mask,temp,zeros,ones,pixels,tiles,P,cx,cy=table.unpack(saved,1,13)
  local backdropCorner=backdrop:FindFirstChildWhichIsA('UICorner')
  if contourRadius and backdropCorner then
@@ -6164,17 +6164,51 @@ local function addColorPicker(container, config)
         Position = UDim2.new(1, -156, 0, 0), Size = UDim2.new(0, 80, 1, 0),
         FontFace = font(Enum.FontWeight.SemiBold), TextSize = 12, TextColor3 = Theme.mistDim,
         TextXAlignment = Enum.TextXAlignment.Right, ZIndex = 5, Parent = header})
-    -- Preview dot: a fixed faint ring + a solid fill, so every color reads the same
-    -- (a fading rim made white blend into its own border and dark colors look outlined).
-    -- Inner circles are inset by a fixed offset from the parent's own edges (not
-    -- centred by AnchorPoint), so both edges round the same way under UIScale.
-    local swatchRing = create("Frame", {Name = "SwatchRing", BackgroundColor3 = Color3.new(1, 1, 1),
-        BackgroundTransparency = 0.78, BorderSizePixel = 0,
-        Position = UDim2.new(1, -65, 0.5, -14), Size = UDim2.fromOffset(28, 28), ZIndex = 5, Parent = header})
-    corner(swatchRing, UDim.new(0.5, 0))
-    local swatch = create("Frame", {Name = "Swatch", BorderSizePixel = 0,
-        Position = UDim2.fromOffset(3, 3), Size = UDim2.new(1, -6, 1, -6), ZIndex = 6, Parent = swatchRing})
+    -- Preview: a liquid-glass bead filled with the colour. The colour is the
+    -- liquid; over it sit a soft depth shade, the window's own liquid rim
+    -- (9-sliced at the bead's radius) and a specular highlight. It wobbles like
+    -- a droplet when the colour changes.
+    local BEAD = 26
+    local beadHolder = create("Frame", {Name = "Swatch", BackgroundTransparency = 1,
+        AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(1, -51, 0.5, 0),
+        Size = UDim2.fromOffset(BEAD, BEAD), ZIndex = 5, Parent = header})
+    local bead = create("Frame", {Name = "Bead", BackgroundTransparency = 1, AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromScale(1, 1), ZIndex = 5, Parent = beadHolder})
+    local swatch = create("Frame", {Name = "Fill", BorderSizePixel = 0, Size = UDim2.fromScale(1, 1),
+        ZIndex = 6, Parent = bead})
     corner(swatch, UDim.new(0.5, 0))
+    local depth = create("Frame", {Name = "Depth", BackgroundColor3 = Color3.new(0, 0, 0), BorderSizePixel = 0,
+        Size = UDim2.fromScale(1, 1), ZIndex = 7, Parent = bead})
+    corner(depth, UDim.new(0.5, 0))
+    create("UIGradient", {Rotation = 90,
+        Transparency = numberSeq({{0, 1}, {0.45, 1}, {1, 0.55}}), Parent = depth})
+    local beadRim = Resize.beadRim
+    if beadRim then
+        local k = Layout.uiScale
+        local s, mg = beadRim.side, beadRim.margin
+        create("ImageLabel", {Name = "LiquidRim", BackgroundTransparency = 1,
+            ImageContent = Content.fromObject(beadRim.image), ScaleType = Enum.ScaleType.Slice,
+            SliceCenter = Rect.new(s / 2 - 1, s / 2 - 1, s / 2 + 1, s / 2 + 1), SliceScale = 1 / k,
+            Position = UDim2.fromOffset(-mg / k, -mg / k), Size = UDim2.new(1, 2 * mg / k, 1, 2 * mg / k),
+            ZIndex = 8, Parent = bead})
+    else
+        specularRim(depth, 1, 0.2)
+    end
+    local glint = create("Frame", {Name = "Highlight", BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0,
+        AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.36, 0.3),
+        Size = UDim2.fromScale(0.42, 0.24), Rotation = -32, ZIndex = 9, Parent = bead})
+    corner(glint, UDim.new(0.5, 0))
+    create("UIGradient", {Rotation = 90,
+        Transparency = numberSeq({{0, 0.35}, {0.6, 0.8}, {1, 1}}), Parent = glint})
+    local wobbling, beadShown = false, false
+    local function wobble()
+        if not beadShown then beadShown = true; return end -- no wobble for the first colour
+        if wobbling then return end
+        wobbling = true
+        bead.Size = UDim2.fromScale(1.1, 0.9)
+        tween(bead, 0.55, {Size = UDim2.fromScale(1, 1)}, Enum.EasingStyle.Elastic)
+        task.delay(0.35, function() wobbling = false end)
+    end
     local chevron = create("Frame", {Name = "Chevron", BackgroundTransparency = 1, AnchorPoint = Vector2.new(0.5, 0.5),
         Position = UDim2.new(1, -26, 0.5, 0), Size = UDim2.fromOffset(12, 12), ZIndex = 5, Parent = header})
     for _, side in {-1, 1} do
@@ -6335,7 +6369,8 @@ local function addColorPicker(container, config)
         alphaKnob.BackgroundTransparency = obj.Transparency
         alphaKnobHolder.Position = along(obj.Transparency)
         alphaValue.Text = string.format("%d%%", math.round(obj.Transparency * 100))
-        swatch.BackgroundColor3 = color
+        if swatch.BackgroundColor3 ~= color then swatch.BackgroundColor3 = color; wobble() end
+        swatch.BackgroundTransparency = obj.Transparency * 0.8
         hexValue.Text = hexOf(color)
         if not editingHex then hexBox.Text = string.sub(hexValue.Text, 2) end
     end
