@@ -3437,10 +3437,25 @@ conn=ch.Event:Connect(function(tag,fid,ox,oy,w,h,r,dir,ex,g,cardScale,pos,n,mat,
       local joined=clamp((v-pv-cv-.08)/.25,0,1)
       alpha*=joined
       if joined>0 then
-       local light=(gx*.6+gy*.8)/gl;if light<0 then light=0 elseif light>1 then light=1 end
-       local dd=dist>0 and dist or 0
-       local key=floor(dd*16);if key>1024 then key=1024 end
-       local ps=RIM_NEAR[key]*(.18+.82*light)+RIM_BROAD[key]*light
+       local qx,qy=ox+x+.5,oy+y+.5
+       local sdp=sdRR(qx,qy,0,0,w,h,r)
+       local ps
+       if sdp<=0 then
+        -- inside the window: the window's own rim, from its own outline (distance and
+        -- normal), so these pixels match the real window exactly; the drops add nothing
+        local nx=sdRR(qx+.5,qy,0,0,w,h,r)-sdRR(qx-.5,qy,0,0,w,h,r)
+        local ny=sdRR(qx,qy+.5,0,0,w,h,r)-sdRR(qx,qy-.5,0,0,w,h,r)
+        local nl=sqrt(nx*nx+ny*ny)+1e-6
+        local light=(-nx*.6-ny*.8)/nl;if light<0 then light=0 elseif light>1 then light=1 end
+        local key=floor(-sdp*16);if key>1024 then key=1024 end
+        ps=RIM_NEAR[key]*(.18+.82*light)+RIM_BROAD[key]*light
+       else
+        -- just outside: the merged outline, so the window's edge bends into the stream
+        local light=(gx*.6+gy*.8)/gl;if light<0 then light=0 elseif light>1 then light=1 end
+        local dd=dist>0 and dist or 0
+        local key=floor(dd*16);if key>1024 then key=1024 end
+        ps=RIM_NEAR[key]*(.18+.82*light)+RIM_BROAD[key]*light
+       end
        if ps>shine then shine=ps>1 and 1 or ps end
       end
      end
