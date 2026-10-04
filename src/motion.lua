@@ -3176,13 +3176,13 @@ local floor,min,max,sqrt=math.floor,math.min,math.max,math.sqrt
 local rng=Random.new()
 local function rand(a,b) return rng:NextNumber(a,b) end
 local function clamp01(v) if v<0 then return 0 elseif v>1 then return 1 end return v end
-local FL={h=15,rho0=3,k=.6,kn=2.2,sig=.6,beta=.3,maxV=6.5,count=260,rush=5.6,rate=8}
+local FL={h=15,rho0=3,k=.65,kn=2.3,sig=.32,beta=.14,maxV=6.5,count=260,rush=5.6,rate=8}
 local function sdRound(x,y,x0,y0,x1,y1,r)
  local qx=math.abs(x-(x0+x1)/2)-((x1-x0)/2-r);local qy=math.abs(y-(y0+y1)/2)-((y1-y0)/2-r)
  local ox,oy=max(qx,0),max(qy,0)
  return sqrt(ox*ox+oy*oy)+min(max(qx,qy),0)-r
 end
-local function newSim(g) return {g=g,xs={},ys={},vx={},vy={},px={},py={},t=0,injected=0,neckOpen=true,neckH=3,mode='fill',snapAt=-1,suck=false,absorb=false} end
+local function newSim(g) return {visc=1,g=g,xs={},ys={},vx={},vy={},px={},py={},t=0,injected=0,neckOpen=true,neckH=3,mode='fill',snapAt=-1,suck=false,absorb=false} end
 local function sdAllowed(sim,x,y)
  local g=sim.g
  local d=sdRound(x,y,g.gap,g.cy-g.ch/2,g.gap+g.cw,g.cy+g.ch/2,g.rad)
@@ -3206,6 +3206,8 @@ local function buildGrid(xs,ys,h)
 end
 local function substep(sim,dt)
  local xs,ys,vx,vy,px,py=sim.xs,sim.ys,sim.vx,sim.vy,sim.px,sim.py
+ -- drop any particle that went invalid (NaN or infinite) instead of poisoning the grid
+ for i=#xs,1,-1 do if not (math.abs(xs[i])<1e5 and math.abs(ys[i])<1e5 and math.abs(vx[i])<1e5 and math.abs(vy[i])<1e5) then removeAt(sim,i) end end
  local n=#xs;if n==0 then return end
  local h=FL.h;local g=sim.g
  local grid=buildGrid(xs,ys,h)
@@ -3216,7 +3218,7 @@ local function substep(sim,dt)
    if cell then for _,j in ipairs(cell) do if j>i then
     local dx,dy=xs[j]-xs[i],ys[j]-ys[i];local r=sqrt(dx*dx+dy*dy)
     if r>0 and r<h then local q=r/h;local ux,uy=dx/r,dy/r;local u=(vx[i]-vx[j])*ux+(vy[i]-vy[j])*uy
-     if u>0 then local I=dt*(1-q)*(FL.sig*u+FL.beta*u*u)/2;vx[i]-=I*ux;vy[i]-=I*uy;vx[j]+=I*ux;vy[j]+=I*uy end end
+     if u>0 then local I=dt*(1-q)*(FL.sig*sim.visc*u+FL.beta*sim.visc*u*u)/2;if I>u*.5 then I=u*.5 end;vx[i]-=I*ux;vy[i]-=I*uy;vx[j]+=I*ux;vy[j]+=I*uy end end
    end end end end end
  end
  for i=1,n do
@@ -3247,7 +3249,7 @@ local function substep(sim,dt)
   end
  end
  for i=n,1,-1 do
-  if xs[i]<-6 and (sim.absorb or not sim.neckOpen) then removeAt(sim,i) else
+  if not (math.abs(xs[i])<1e5 and math.abs(ys[i])<1e5) or (xs[i]<-6 and (sim.absorb or not sim.neckOpen)) then removeAt(sim,i) else
    if xs[i]<-6 then xs[i]=-6 end
    local d=sdAllowed(sim,xs[i],ys[i])+2
    if d>0 then
@@ -3265,6 +3267,8 @@ local function simFrame(sim)
  sim.t+=1/60
  local g=sim.g
  if sim.mode=='fill' then
+  -- after the rush hits the far wall the liquid thickens: one clean slosh, no jiggling
+  sim.visc=1+1.6*clamp01((sim.t-.55)/.35)
   -- the opening widens from a thin bud to the full stream
   local grow=clamp01((sim.t-.12)/.4);sim.neckH=3+8*grow*grow*(3-2*grow)
   if sim.t<.3 then if rand(0,1)<.55 then inject(sim,1,1.1,.8) end
