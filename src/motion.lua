@@ -995,6 +995,10 @@ local material=(function()
  -- first picture of a transition) is rebuilt inline.
  local sheet,spare=nil,nil
  m.sheetTask=nil
+ function m.invalidateSheet()
+  m.sheetTask=nil
+  if sheet then sheet.time=-math.huge end
+ end
  local function newSheet(SW,SH)
   -- short strips: every layer blit only touches one strip, so the work splits
   -- into small pieces the frame budget can spread out
@@ -1821,7 +1825,7 @@ function api.start(minimized,instant)
   if minimized then preparePanel();morph=newMorph(1);morph.t=1;hideBubbleBody();iconEntries=snapshot(iconHolder) end
   instantFinish=true;finish(minimized);instantFinish=false;return
  end
- material.sheetTask=nil -- a pending bubble/panel marble rebuild belongs to the old surface
+ material.sheetTask=nil -- a pending marble rebuild belongs to the old surface
  preparePanel()
  panelEntries=snapshot(panel,{[backdrop]=true});iconEntries=snapshot(iconHolder)
  morph=newMorph(minimized and 1 or -1);state='morph';Resize.animating=true
@@ -1839,10 +1843,10 @@ function api.start(minimized,instant)
   local lead=0
  flow.clickTime=started
  flow.shotTime=started+lead;flow.lead=lead;flow.resetElapsed=true;flow.panelAlpha=nil;flow.iconAlpha=nil;flow.hideIn=nil;flow.revealed=false;flow.handoff=nil
+ flow.finalRefreshStarted=false;flow.freshReady=false
  local function reveal()
   flow.firstLatency=flow.firstLatency*.5+min(.08,os.clock()-started)*.5
    showSurface();canvas.Visible=true;flow.revealed=true
-   flow.holdRedrawAt=os.clock()+1/12
    flow.shotTime=os.clock();flow.lead=0;flow.resetElapsed=true
   -- The backdrop (or bubble body) stays two more frames, until the liquid's first
   -- upload is certainly on screen; hiding it in the same frame showed one empty frame.
@@ -1867,7 +1871,7 @@ step=function(dt,paced)
  end
  local pts,drops={},{}
  local completed=nil
-  if state=='morph' and ((morph.dir==1 and os.clock()-flow.clickTime>=CONTENT_FADE_SECONDS)
+  if state=='morph' and ((morph.dir==1 and flow.freshReady and os.clock()-flow.clickTime>=CONTENT_FADE_SECONDS)
    or (morph.dir==-1 and flow.revealed and not flow.hideIn)) then morph.t=min(1,morph.t+dt*speed/morph.pace) end
   local T=state=='bubble' and 1 or (morph.dir==1 and morph.t or 1-morph.t)
   local g=ease(T);local mx=cx+(bx-cx)*g+morph.bend[1]*sin(pi*g)*.5;local my=cy+(by-cy)*g+morph.bend[2]*sin(pi*g)*.5
@@ -1981,7 +1985,12 @@ track(RunService.RenderStepped:Connect(function(dt)
  if flow.resetElapsed then flow.resetElapsed=false;elapsed=0 end
  elapsed+=dt;flow.frameDt=flow.frameDt*.9+min(dt,.05)*.1
  local ok,err=xpcall(function()
-  if flow.hideIn then flow.hideIn-=1;if flow.hideIn<=0 then flow.hideIn=nil;hideBackgrounds();hideBubbleBody();if state=='morph' and morph and morph.dir==-1 then flow.shotTime=os.clock();flow.resetElapsed=true end end end
+   if flow.hideIn then flow.hideIn-=1;if flow.hideIn<=0 then
+    flow.hideIn=nil
+    if morph.dir==-1 or (flow.freshReady and os.clock()-flow.clickTime>=CONTENT_FADE_SECONDS) then hideBackgrounds() end
+    hideBubbleBody()
+    if state=='morph' and morph and morph.dir==-1 then flow.shotTime=os.clock();flow.resetElapsed=true end
+   end end
   if flow.retire then flow.retire.frames-=1;if flow.retire.frames<=0 then retireNow() end end
   -- The next marble sheet builds in the background on its own small slice.
   -- During a transition it goes first and the picture gets what is left of
@@ -1999,18 +2008,24 @@ track(RunService.RenderStepped:Connect(function(dt)
    elseif coroutine.status(sheetTask)=='dead' and material.sheetTask==sheetTask then material.sheetTask=nil end
   end
   if state~='bubble' then runSheet(.0015) end
-   -- Hold the first panel shape while its contents fade out, but refresh its
-   -- marble at the sheet rate so the liquid does not freeze before the morph.
+   -- Keep the live panel backdrop visible during the content fade; the first
+   -- liquid picture waits underneath until the shape is ready to take over.
    local waitingForContent=state=='morph' and morph and
-    ((morph.dir==1 and os.clock()-flow.clickTime<CONTENT_FADE_SECONDS)
+    ((morph.dir==1 and (os.clock()-flow.clickTime<CONTENT_FADE_SECONDS or not flow.freshReady))
      or (morph.dir==-1 and (not flow.revealed or flow.hideIn)))
-  if waitingForContent then elapsed=0 end
-  -- finish the update in flight before starting the next one
+   if state=='morph' and morph.dir==1 and flow.revealed and not flow.hideIn and not waitingForContent then hideBackgrounds() end
+   if waitingForContent then elapsed=0 end
+   -- finish the update in flight before starting the next one
    if pacing.task then resumeRender()
-   elseif waitingForContent and flow.revealed and morph.dir==1 and os.clock()>=flow.holdRedrawAt then
-    flow.holdRedrawAt=os.clock()+1/12
+   elseif waitingForContent and morph.dir==1 and flow.revealed and not flow.finalRefreshStarted
+    and os.clock()-flow.clickTime>=CONTENT_FADE_SECONDS*.6 then
+    -- Rebuild the panel-shaped picture from the current marble near the end of
+    -- the fade. The live backdrop stays visible until this picture is ready.
+    flow.finalRefreshStarted=true
+    material.invalidateSheet()
     flow.shotTime=os.clock()
     step(0,true)
+    pacing.onDone=function() flow.freshReady=true end
     if pacing.task then resumeRender() end
     -- Keep the idle liquid border in step with the per-frame icon gradient.
    elseif not waitingForContent and not flow.handoff and ((state=='bubble' and elapsed>=PERF.bubbleGap) or elapsed>=1/60) then
@@ -2027,7 +2042,7 @@ track(RunService.RenderStepped:Connect(function(dt)
   -- The panel contents fade out before minimize and in after restore. The
   -- bubble icon still follows the morph clock.
   if state=='morph' and morph then
-    local vt=if (morph.dir==1 and os.clock()-flow.clickTime<CONTENT_FADE_SECONDS)
+    local vt=if (morph.dir==1 and (os.clock()-flow.clickTime<CONTENT_FADE_SECONDS or not flow.freshReady))
      or (morph.dir==-1 and (not flow.revealed or flow.hideIn)) then 0
     else clamp(morph.t+(os.clock()-flow.shotTime)*speed/morph.pace,0,1)
    local VT=morph.dir==1 and vt or 1-vt
@@ -2037,7 +2052,7 @@ track(RunService.RenderStepped:Connect(function(dt)
     else .001
    -- until the liquid is on screen the panel/bubble must stay (only its content fades)
    local ia=clamp((VT-.65)/.35,0,1)
-   if not flow.revealed or flow.hideIn then if morph.dir==1 then pa=max(pa,.001) else ia=max(ia,.001) end end
+    if not flow.revealed or flow.hideIn or (morph.dir==1 and not flow.freshReady) then if morph.dir==1 then pa=max(pa,.001) else ia=max(ia,.001) end end
    if pa~=flow.panelAlpha then flow.panelAlpha=pa;fadePanel(pa) end
    if ia~=flow.iconAlpha then flow.iconAlpha=ia;fadeIcon(ia) end
    -- Un-minimize hand-off: in the last stretch the shape is all but the panel,
@@ -2625,7 +2640,7 @@ do
    local clear=not (x>w-60 and y>h-60)
    for _,d in ipairs(drops) do local gap=math.abs((d.arc-arc+L/2)%L-L/2);if gap<140 then clear=false end end
    if clear then
-    drops[#drops+1]={slot=slot(),start=clock,bud=rand(.7,1.1),float=rand(1.4,3.6),back=rand(1.6,2.6),arc=arc,out=rand(.7,1.15)*REF_R,r=rand(8.5,13),speed=rand(.25,.7)*REF_R*(rand(0,1)<.5 and -1 or 1),bob=rand(.6,1.4),phase=rand(0,2*pi),split=rand(0,1)<.4,splitSpin=rand(2.5,4.5)}
+    drops[#drops+1]={slot=slot(),start=clock,bud=rand(.7,1.1),float=rand(1.4,3.6),back=rand(1.6,2.6),arc=arc,out=rand(.7,1.15)*REF_R,r=rand(8.5,12.5),speed=rand(.25,.7)*REF_R*(rand(0,1)<.5 and -1 or 1),bob=rand(.6,1.4),phase=rand(0,2*pi),split=rand(0,1)<.4,splitSpin=rand(2.5,4.5)}
     return
    end
   end
