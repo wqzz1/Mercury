@@ -2612,7 +2612,16 @@ local function shadeCells(iy,ix,endX,mat,phase)
         if rimMode then
          -- 'tint' bakes the rim colour into the pixels (label stays white), so a
          -- surface can switch between liquid and rim pictures without a colour flash
-         write(pixels,off,(rimMode=='tint' and RIM_R+RIM_G*256+RIM_B*65536 or 16777215)+floor(alpha*shine*255+.5)*16777216)
+         if rimMode=='tint' then
+          -- disclosure cards: a calmer, more even rim than the window's (the
+          -- strong one-sided highlight read as a glaring right/bottom edge
+          -- on a card this small)
+          shine=rimLookup[key]*(.45+.55*light)*.8+broadLookup[key]*light*.5
+          shine=(shine>1 and 1 or shine)*.62
+          write(pixels,off,RIM_R+RIM_G*256+RIM_B*65536+floor(alpha*shine*255+.5)*16777216)
+         else
+          write(pixels,off,16777215+floor(alpha*shine*255+.5)*16777216)
+         end
         elseif mat then
          local mx,my=x-matX,y-matY
          if mx<0 or my<0 or mx>=matW or my>=matH then mx,my=mirror(mx,matW),mirror(my,matH) end
