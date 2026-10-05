@@ -403,12 +403,15 @@ local function collectFade(rootObject: Instance, skip: { [Instance]: boolean }?)
         end
         if object:IsA("GuiObject") then
             table.insert(entries, { instance = object, property = "BackgroundTransparency", base = object.BackgroundTransparency })
-            if object:IsA("TextLabel") or object:IsA("TextButton") then
+            if object:IsA("TextLabel") or object:IsA("TextButton") or object:IsA("TextBox") then
                 -- Status lines can be mid-tween when the snapshot is taken; their
                 -- FadeTarget is where they're heading, so fade to that instead.
                 local target = object:GetAttribute("FadeTarget")
                 local base = if typeof(target) == "number" then target else object.TextTransparency
                 table.insert(entries, { instance = object, property = "TextTransparency", base = base })
+            end
+            if object:IsA("ScrollingFrame") then
+                table.insert(entries, { instance = object, property = "ScrollBarImageTransparency", base = object.ScrollBarImageTransparency })
             end
         elseif object:IsA("UIStroke") then
             table.insert(entries, { instance = object, property = "Transparency", base = object.Transparency })
@@ -2066,6 +2069,7 @@ local function updateDrag(input: InputObject)
             return
         end
         drag.active = true
+        if Resize.syncBones then Resize.syncBones() end
         skeletonGhost.Visible = true
         tween(skeletonGroup, 0.18, { GroupTransparency = 0 })
         if skeletonGlow then
@@ -3078,7 +3082,9 @@ local material=(function()
    end
    if rowsMode then strip.rows:WritePixelsBuffer(Vector2.zero,Vector2.new(n,BLOCK),buf) else strip.cols:WritePixelsBuffer(Vector2.zero,Vector2.new(BLOCK,n),buf) end
    strip.rowsMode,strip.c,strip.s,strip.start,strip.used=rowsMode,c,s,start,used
-   strip.ccx,strip.ccy=ox+frame.Position.X.Scale*A.w,oy+frame.Position.Y.Scale*A.h
+   -- origin-free: compose adds its own (ox,oy), so two composes for different
+   -- targets (one may be suspended mid-way) never misplace each other's veins
+   strip.ccx,strip.ccy=frame.Position.X.Scale*A.w,frame.Position.Y.Scale*A.h
   end
  end
  -- withTop=false leaves gloss/vignette to the panel's own GUI frames (plain vertical
@@ -3114,12 +3120,12 @@ local material=(function()
     for _,strip in ipairs(A.veins) do
      if strip.rowsMode then
       for yb=ry0,ry1-1,BLOCK do
-       local xs=round(strip.ccx+(strip.start-(yb+BLOCK/2-strip.ccy)*strip.s)/strip.c)
+       local xs=round(ox+strip.ccx+(strip.start-(yb+BLOCK/2-oy-strip.ccy)*strip.s)/strip.c)
        if xs<rx1 and xs+strip.used>rx0 then image:DrawImage(Vector2.new(xs-tx,yb-ty),strip.rows,OVER) end
       end
      else
       for xb=rx0,rx1-1,BLOCK do
-       local ys=round(strip.ccy+(strip.start-(xb+BLOCK/2-strip.ccx)*strip.c)/strip.s)
+       local ys=round(oy+strip.ccy+(strip.start-(xb+BLOCK/2-ox-strip.ccx)*strip.c)/strip.s)
        if ys<ry1 and ys+strip.used>ry0 then image:DrawImage(Vector2.new(xb-tx,ys-ty),strip.cols,OVER) end
       end
      end
@@ -3227,6 +3233,34 @@ local material=(function()
   if not assets then return nil end
   return composeSheet(px,py)
  end
+ -- A small region composed fresh on demand (sub-pixel smooth lava), for liquid
+ -- that must flow at full frame rate: the notification card while it is up and
+ -- disclosures while they move. The sheet only refreshes SHEET_RATE times a
+ -- second, which read as a ~10 fps marble on anything that sits still. Each
+ -- caller keeps its own target; it grows in 32 px steps and is never shrunk.
+ -- (px,py): the panel's top-left in the caller's image; (x0,y0,w,h): the area
+ -- needed, in the same space. Returns pixels, origin and size like sheetAt.
+ local regions={}
+ function m.regionAt(key,px,py,x0,y0,w,h)
+  if not assets then return nil end
+  x0,y0=floor(x0),floor(y0)
+  w,h=max(1,ceil(w)),max(1,ceil(h))
+  local r=regions[key]
+  if not r or r.w<w or r.h<h then
+   if r then destroyTiles(r.tiles) end
+   local cw,ch=ceil(w/32)*32,ceil(h/32)*32
+   r={w=cw,h=ch,tiles=tiled(cw,ch,128),pixels=buffer.create(cw*ch*4)}
+   regions[key]=r
+  end
+  -- whole-pixel lava like the sheet: the smooth (resampled) path rounds down
+  -- once more per blend and read ~3 levels darker than the panel
+  compose(r.tiles,px-x0,py-y0,0,0,r.w,h,r.pixels,r.w,true,false,false)
+  return r.pixels,x0,y0,r.w,h
+ end
+ function m.releaseRegion(key)
+  local r=regions[key]
+  if r then destroyTiles(r.tiles);regions[key]=nil end
+ end
  -- Idle bubble: the marble drifts slowly, so it is rebuilt BUBBLE_RATE times a
  -- second in the background (into a second buffer, swapped in when done) while
  -- the outline itself redraws every frame from the latest finished marble.
@@ -3298,8 +3332,11 @@ local material=(function()
   end)
   if not ok then warn('[LiquidMaterial] lava texture unavailable',err) end
   -- The lava texture is magnified ~5x on screen, so its texels showed as grain
-  -- and steps. Build a smooth 3x copy once (Catmull-Rom, separable, wrapping the
-  -- seamless tile), in the background, then switch the panel and the liquid to it.
+  -- and steps. Build a smooth 3x copy once (cubic B-spline, separable, wrapping
+  -- the seamless tile), in the background, then switch the panel and the liquid
+  -- to it. B-spline rather than Catmull-Rom: Catmull-Rom passes through every
+  -- source texel and overshoots, so the tile's speckle survived as dotted halos
+  -- along the strands; the B-spline is C2-smooth with no ringing.
   if not texture then return end
   local ok2,err2=pcall(function()
    local F=3
@@ -3307,8 +3344,9 @@ local material=(function()
    local px=texture:ReadPixelsBuffer(Vector2.zero,texture.Size)
    local function ch(x,y,c) return buffer.readu8(px,((y%tile)*src+(x%tile))*4+c) end
    local function weights(t)
+    local u=1-t
     local t2,t3=t*t,t*t*t
-    return -.5*t3+t2-.5*t, 1.5*t3-2.5*t2+1, -1.5*t3+2*t2+.5*t, .5*t3-.5*t2
+    return u*u*u/6, (3*t3-6*t2+4)/6, (-3*t3+3*t2+3*t+1)/6, t3/6
    end
    local H=tile*F
    -- horizontal pass: tile x tile -> H x tile (float channels)
@@ -3358,6 +3396,7 @@ local material=(function()
   if not ok2 then warn('[LiquidMaterial] smooth lava unavailable',err2) end
  end)
  function m.destroy()
+  for key in pairs(regions) do m.releaseRegion(key) end
   local stars=Liquid.stars
   if stars then Liquid.stars=nil;stars.free() end
   release(assets);assets=nil
@@ -3791,6 +3830,7 @@ do
  local function crossing(f) local lo,hi=margin-12,margin+radius;for _=1,40 do local mid=(lo+hi)/2;if f(mid)>=.47917 then hi=mid else lo=mid end end;return hi end
  if ok then
   contourOut=clamp(margin-crossing(function(t) return field(t,side/2) end),0,4)
+  Resize.contourOut=contourOut
   if contourOut>.02 then
    local o=contourOut
    P={x=margin+o,y=margin+o,w=side-2*margin-2*o,h=side-2*margin-2*o,r=max(1,radius-o)}
@@ -4588,7 +4628,9 @@ local function shadeCells(iy,ix,endX,mat,phase)
         local shine=rimLookup[key]*(.18+.82*light)*.8+broadLookup[key]*light;if shine>1 then shine=1 end
         local off=(y*OW+x)*4
         if rimMode then
-         write(pixels,off,16777215+floor(alpha*shine*255+.5)*16777216)
+         -- 'tint' bakes the rim colour into the pixels (label stays white), so a
+         -- surface can switch between liquid and rim pictures without a colour flash
+         write(pixels,off,(rimMode=='tint' and RIM_R+RIM_G*256+RIM_B*65536 or 16777215)+floor(alpha*shine*255+.5)*16777216)
         elseif mat then
          local mx,my=x-matX,y-matY
          if mx<0 or my<0 or mx>=matW or my>=matH then mx,my=mirror(mx,matW),mirror(my,matH) end
@@ -4865,6 +4907,174 @@ local function perimeter(w,h,r) return 2*(w-2*r)+2*(h-2*r)+2*pi*r end
 
 local jobs={}
 local stopped=false
+
+-- Disclosures (dropdown lists, picker bodies, sections) share the panel-piece
+-- renderer and its paced job queue. While moving, a neck grows into a hanging
+-- drop that spreads into the rounded card; once a persistent card is open its
+-- rim is baked once and nothing renders again until it resizes or retints.
+function Resize.createDisclosure(host,inset,zIndex,persistent)
+ local label=create('ImageLabel',{Name='LiquidDisclosure',BackgroundTransparency=1,Visible=false,ZIndex=zIndex,Parent=host})
+ passThrough(label)
+ local data={p=0,top=0,height=0,surface=nil,ready=-1,dead=false,rimKey=nil,drawn=nil,
+  vel=0,lastP=0,lastT=os.clock(),cost=1/60,shownLen=nil,pending=nil,w=0,h=0,scale=1}
+ local PAD=24
+ local function ease(t) t=clamp(t,0,1);return t*t*(3-2*t) end
+ local job={name='disclosure',interval=0,elapsed=1}
+ local function hostShown()
+  if data.dead or not host.Parent or Resize.animating or Resize.minimized then return false end
+  local ancestor=host
+  while ancestor and ancestor~=screenGui do
+   if ancestor:IsA('GuiObject') and not ancestor.Visible then return false end
+   ancestor=ancestor.Parent
+  end
+  return true
+ end
+ local function geometry()
+  local scale=root.AbsoluteSize.X/math.max(1,root.Size.X.Offset)
+  local width=max(8,host.AbsoluteSize.X-inset*2*scale)
+  local height=min(900,data.height*scale)
+  return scale,width,height
+ end
+ local function lengthAt(p,height) local o=Resize.contourOut or 0;return max(2,max(2,height-2*o)*ease(p/.65)) end
+ local function rimKeyNow()
+  local scale,width,height=geometry()
+  return string.format('%d|%d|%.3f|%d|%d|%d',floor(width+.5),floor(height+.5),scale,RIM_R,RIM_G,RIM_B)
+ end
+ local function mode()
+  if data.dead or data.p<=0 or data.height<=0 then return nil end
+  if data.p<1 then return 'liquid' end
+  return persistent and 'rim' or nil
+ end
+ -- Place the label. Between liquid pictures the last one is stretched along
+ -- the drop's length on the GPU (anchored at the top, where it hangs from), so
+ -- the growth moves at the game's frame rate while the shape detail updates as
+ -- fast as the CPU allows.
+ local function place()
+  local scale=data.scale;local w,h=data.w,data.h
+  local f=1
+  if data.drawn=='liquid' and data.shownLen then
+   local _,_,height=geometry()
+   f=clamp(lengthAt(data.p,height)/data.shownLen,.8,1.25)
+  end
+  label.Position=UDim2.fromOffset(inset-PAD/scale,data.top-PAD*f/scale)
+  label.Size=UDim2.fromOffset(w/scale,h*f/scale)
+ end
+ job.active=function()
+  local m=mode()
+  if not m then
+   if label.Visible then label.Visible=false end
+   data.ready=-1;data.drawn=nil;data.rimKey=nil;data.pending=nil;data.shownLen=nil
+   return false
+  end
+  if data.ready>0 then data.ready-=1 end
+  -- a finished picture's pixels reach the screen one frame after they are
+  -- written: switch the stretch reference in that same frame
+  if data.pending then
+   local pend=data.pending;data.pending=nil
+   data.shownLen=pend.len;data.drawn=pend.mode;data.w,data.h,data.scale=pend.w,pend.h,pend.scale
+  end
+  label.Visible=data.surface~=nil and data.ready==0 and data.drawn~=nil
+  if data.drawn then place() end
+  if not persistent then label.ImageTransparency=ease((data.p-.78)/.22) end
+  if not hostShown() then return false end
+  if m=='liquid' then return true end
+  return data.rimKey~=rimKeyNow()
+ end
+ job.run=function()
+  local m=mode();if not m then return end
+  local started=os.clock()
+  local scale,width,height=geometry()
+  local w,h=ceil((width+PAD*2)/2)*2,ceil((height+PAD*2)/2)*2
+  if not data.surface or data.surface.OW~=w or data.surface.OH~=h then
+   if data.surface then data.surface.image:Destroy() end
+   data.surface=newSurface(w,h);data.ready=-1;data.drawn=nil;data.shownLen=nil
+   label.ImageContent=Content.fromObject(data.surface.image)
+   data.w,data.h,data.scale=w,h,scale
+  end
+  -- draw for the moment the picture will be on screen: one render plus the
+  -- one-frame upload lag ahead along the current motion
+  local p=1
+  if m=='liquid' then
+   local lead=data.cost+1/60
+   p=clamp(data.p+data.vel*lead,0,1)
+   if data.vel>0 then p=min(p,.999) end
+  end
+  local o=Resize.contourOut or 0
+  local cw=max(4,width-2*o)
+  local length=lengthAt(p,height)
+  local spread=ease((p-.23)/.55)
+  -- while it is still a drip the neck reaches up across the gap and hangs from
+  -- the button; it lets go as the drop spreads into the card
+  local lift=(data.gap or 0)*scale*(1-spread)
+  local radius=min(max(1,12*scale-o),length/2,cw/2)
+  local bulb=min(cw*.15,max(3,length*.28))
+  local neck=min(cw*.045,max(1,length*.1))
+  -- sample heights: a few along the neck in the gap, dense around the rounded
+  -- corners (so the flat top and bottom stay flat), even in between
+  local ys={}
+  if lift>.5 then for i=0,3 do ys[#ys+1]=-lift+lift*i/4 end end
+  local CORNER,MIDDLE=8,24
+  for i=0,CORNER-1 do ys[#ys+1]=radius*(1-math.cos(i/CORNER*pi/2)) end
+  for i=0,MIDDLE do ys[#ys+1]=radius+(length-2*radius)*i/MIDDLE end
+  for i=1,CORNER do ys[#ys+1]=length-radius+radius*math.sin(i/CORNER*pi/2) end
+  local points={};local left,right={},{}
+  for index,y in ipairs(ys) do
+   local i=40*clamp(y/max(1,length),0,1)
+   local edge=max(0,radius-y,y-(length-radius))
+   if y<0 then edge=0 end
+   local rect=cw/2-radius+sqrt(max(0,radius*radius-edge*edge))
+   local dy=y-(length-bulb)
+   local drop=sqrt(max(0,bulb*bulb-dy*dy))
+   if y<length-bulb then drop=max(neck,drop) end
+   local half=if y<0 then neck else drop+(rect-drop)*spread
+   local sway=sin(p*pi)*sin(i/40*pi)*cw*.025*(1-spread)
+   left[#left+1]={PAD+width/2+sway-half,PAD+o+y}
+   right[#right+1]={PAD+width/2+sway+half,PAD+o+y}
+  end
+  for _,point in ipairs(left) do points[#points+1]=point end
+  for i=#right,1,-1 do points[#points+1]=right[i] end
+  -- Rim-only pictures, moving or not: the liquid's inside is transparent, so
+  -- the panel's own marble shows through it live (a CPU copy of the marble
+  -- never matched the GPU panel exactly and only refreshed a few times a
+  -- second). Rim-only shading also skips all interior work, so pictures are
+  -- far cheaper and come several times more often.
+  use(data.surface);clearRow=nil;postProcess=nil
+  rimMode='tint';material.compose=nil
+  local ok=pcall(render,points,{})
+  rimMode=false
+  if not ok then return end
+  data.rimKey=if m=='rim' then rimKeyNow() else nil
+  data.cost=data.cost*.6+(os.clock()-started)*.4
+  data.pending={mode=m,len=length,w=w,h=h,scale=scale}
+  if data.ready<0 then data.ready=2 end
+ end
+ -- called when the job goes idle (or its render was cut short): a baked rim
+ -- stays on screen; anything else is dropped. A cut-short rim render must not
+ -- leave the shared renderer in rim mode.
+ job.reset=function()
+  rimMode=false
+  if mode()=='rim' and data.drawn=='rim' and data.rimKey then return end
+  label.Visible=false;data.ready=-1;data.drawn=nil;data.rimKey=nil;data.pending=nil;data.shownLen=nil
+ end
+ jobs[#jobs+1]=job
+ track(host.Destroying:Connect(function()
+  data.dead=true;label.Visible=false
+  if data.surface then data.surface.image:Destroy();data.surface=nil end
+ end))
+ return function(p,top,height,gap)
+  data.gap=gap
+  local now=os.clock()
+  if math.abs(top-data.top)>.01 then data.rimKey=nil end
+  local dt=now-data.lastT
+  if dt>.001 then
+   local v=(p-data.lastP)/dt
+   if p<=0 or p>=1 then v=0 end
+   data.vel=data.vel*.5+v*.5;data.lastP=p;data.lastT=now
+  end
+  data.p=p;data.top=top;data.height=height
+  if data.drawn then place() end
+ end
+end
 
 -- Header logo: a tiny copy of the minimized bubble, rendered 4x larger and
 -- reduced natively, playing with up to two droplets of its own (3 bodies max).
@@ -5698,7 +5908,7 @@ ch:Fire('ready')
   return true
  end
  local function liveDraw(ox,oy)
-  local mat,mx,my,mw,mh=shared.material.sheetAt(-ox,-oy)
+  local mat,mx,my,mw,mh=shared.material.regionAt('toast',-ox,-oy,live.x0,live.y0,live.w,live.h)
   if not mat then return end
   local w,h,x0,y0=live.w,live.h,live.x0,live.y0
   -- source index per card pixel (mirrored past the sheet), rebuilt when the sheet's geometry changes
@@ -6481,7 +6691,46 @@ local function row(container, name, height)
     })
     return frame
 end
+-- Rebuild the visible control grooves when dragging begins. Read screen bounds
+-- so nested sections, disclosure wrappers and scroll offsets are all respected.
+function Resize.syncBones()
+    local tab = tabByName[state.currentTab]
+    local used = 0
+    local scale = root.AbsoluteSize.X / math.max(1, root.Size.X.Offset)
+    if tab then
+        for _, item in tab.content:GetDescendants() do
+            if not item:GetAttribute("MercuryControl") or not item:IsA("GuiObject") then continue end
+            local pos, size = item.AbsolutePosition, item.AbsoluteSize
+            local x0, y0 = pos.X + Layout.padX * scale, pos.Y
+            local x1, y1 = pos.X + size.X - Layout.padX * scale, pos.Y + size.Y
+            local visible = true
+            local ancestor = item
+            while ancestor and ancestor ~= screenGui do
+                if ancestor:IsA("GuiObject") then
+                    if not ancestor.Visible or (ancestor:IsA("CanvasGroup") and ancestor.GroupTransparency > 0.98) then visible = false; break end
+                    if ancestor.ClipsDescendants or ancestor:IsA("ScrollingFrame") then
+                        local p, s = ancestor.AbsolutePosition, ancestor.AbsoluteSize
+                        x0, y0 = math.max(x0, p.X), math.max(y0, p.Y)
+                        x1, y1 = math.min(x1, p.X + s.X), math.min(y1, p.Y + s.Y)
+                    end
+                end
+                ancestor = ancestor.Parent
+            end
+            if visible and x1 > x0 and y1 - y0 > 2 then
+                used += 1
+                local entry = Resize.pageBones[used]
+                if not entry then entry = {bone = Resize.addBone(UDim2.new(), UDim2.fromOffset(20, 20)), bottom = 0}; Resize.pageBones[used] = entry end
+                entry.bone.Position = UDim2.fromOffset((x0 - root.AbsolutePosition.X) / scale, (y0 - root.AbsolutePosition.Y) / scale)
+                entry.bone.Size = UDim2.fromOffset((x1 - x0) / scale, (y1 - y0) / scale)
+                entry.bottom = (y1 - root.AbsolutePosition.Y) / scale
+                entry.bone.Visible = true
+            end
+        end
+    end
+    for index = used + 1, #Resize.pageBones do Resize.pageBones[index].bone.Visible = false end
+end
 local function controlBase(kind, frame, default, callback, flag)
+    frame:SetAttribute("MercuryControl", kind)
     local object = {Type = kind, Instance = frame, Value = default, Disabled = false, Visible = true, Attributes = {}}
     local listeners = {}
     object._listeners = listeners
@@ -6528,6 +6777,59 @@ local function controlBase(kind, frame, default, callback, flag)
         window.Flags[flag] = object
     end
     return object
+end
+-- Shared liquid disclosure for option lists, picker cards and collapsible sections.
+-- A drop hangs from `top` and spreads into the card; contents fade in once the
+-- liquid has reached its full shape. One tweened value drives both directions,
+-- so a click mid-animation reverses smoothly from where it is.
+-- opts: inset, zIndex, top (px below the host's top), gap (px the drip's neck
+-- reaches up to the button above), height() -> card height,
+-- paint(fill, reveal, active, full), persistent (keep a card once open).
+local DISCLOSURE_GAP = 8 -- px between a header/button and the card it opens
+local function liquidDisclosure(host, opts)
+    local value = create("NumberValue", {Name = "LiquidProgress", Value = 0, Parent = host})
+    local render = Resize.createDisclosure and Resize.createDisclosure(host, opts.inset, opts.zIndex, opts.persistent)
+    local activeTween = nil
+    local function smooth(t) t = math.clamp(t, 0, 1); return t * t * (3 - 2 * t) end
+    local function draw()
+        if not host.Parent then return end
+        local p = math.clamp(value.Value, 0, 1)
+        local fill = smooth(p / 0.65)
+        local reveal = smooth((p - 0.78) / 0.22)
+        if not render then reveal = fill end
+        local full = opts.height()
+        opts.paint(fill, reveal, p > 0 and p < 1, full)
+        if render then render(p, opts.top, full, opts.gap or 0) end
+    end
+    track(value:GetPropertyChangedSignal("Value"):Connect(draw))
+    local function set(open, instant)
+        if activeTween then local old = activeTween; activeTween = nil; old:Cancel() end
+        local goal = if open then 1 else 0
+        if instant or math.abs(goal - value.Value) < 0.001 then value.Value = goal; draw(); return end
+        activeTween = tween(value, Layout.transitionTime * math.abs(goal - value.Value),
+            {Value = goal}, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+        local handle = activeTween
+        handle.Completed:Once(function()
+            if activeTween == handle then activeTween = nil; value.Value = goal; draw() end
+        end)
+    end
+    draw()
+    return set, draw
+end
+-- Rotating chevron (two rounded bars) used by every disclosure header.
+local function disclosureChevron(parent, position, size, zIndex)
+    local chevron = create("Frame", {Name = "Chevron", BackgroundTransparency = 1, AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = position, Size = UDim2.fromOffset(size, size), ZIndex = zIndex, Parent = parent})
+    passThrough(chevron)
+    local bars = {}
+    for _, side in {-1, 1} do
+        local bar = create("Frame", {BackgroundColor3 = Theme.mistDim, BorderSizePixel = 0,
+            AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, side * size * 0.2, 0.5, 0),
+            Size = UDim2.fromOffset(2, size * 0.66), Rotation = -side * 45, ZIndex = zIndex, Parent = chevron})
+        corner(bar, UDim.new(0.5, 0))
+        table.insert(bars, bar)
+    end
+    return chevron, bars
 end
 local function addLabel(container, config)
     config = if typeof(config) == "table" then config else {Text = tostring(config or "")}
@@ -6689,42 +6991,100 @@ end
 local function addDropdown(container, config)
     assert(typeof(config) == "table", "Dropdown needs an options table")
     local choices = config.Options or {}
+    local OPTION_H, OPTION_GAP, LIST_PAD = 30, 2, 6
     local frame = row(container, config.Name or "Dropdown", Layout.buttonHeight)
     local button, label = glassButton(frame, config.Name or "Dropdown", config.Name or "Dropdown", 0, Layout.buttonHeight)
-    local list = create("Frame", {Name = "Options", BackgroundColor3 = Theme.tint, BackgroundTransparency = 0.08,
-        BorderSizePixel = 0, Position = UDim2.fromOffset(Layout.padX, Layout.buttonHeight + 2),
-        Size = UDim2.new(1, -Layout.padX * 2, 0, 0), Visible = false, ZIndex = 10, Parent = frame})
-    corner(list, 12); specularRim(list)
-    create("UIListLayout", {SortOrder = Enum.SortOrder.LayoutOrder, Parent = list})
+    local chevron, chevronBars = disclosureChevron(button, UDim2.new(1, -24, 0.5, 0), 12, 5)
+    local listTop = Layout.buttonHeight + DISCLOSURE_GAP
+    -- The list fills the liquid card exactly; the pills sit LIST_PAD inside it.
+    local list = create("CanvasGroup", {Name = "Options", BackgroundTransparency = 1, BorderSizePixel = 0,
+        Position = UDim2.fromOffset(Layout.padX, listTop), Size = UDim2.new(1, -Layout.padX * 2, 0, 0),
+        GroupTransparency = 1, Visible = false, ZIndex = 11, Parent = frame})
+    corner(list, 12)
+    create("UIPadding", {PaddingTop = UDim.new(0, LIST_PAD), PaddingBottom = UDim.new(0, LIST_PAD),
+        PaddingLeft = UDim.new(0, LIST_PAD), PaddingRight = UDim.new(0, LIST_PAD), Parent = list})
+    create("UIListLayout", {Padding = UDim.new(0, OPTION_GAP), SortOrder = Enum.SortOrder.LayoutOrder,
+        HorizontalAlignment = Enum.HorizontalAlignment.Center, Parent = list})
     local obj = controlBase("Dropdown", frame, nil, config.Callback, config.Flag)
+    obj.Open = false
+    local function listHeight()
+        local n = #choices
+        return if n > 0 then LIST_PAD * 2 + n * OPTION_H + (n - 1) * OPTION_GAP else 0
+    end
+    local animate, redraw = liquidDisclosure(frame, {inset = Layout.padX, zIndex = 10, top = listTop, gap = DISCLOSURE_GAP,
+        persistent = true, height = listHeight,
+        paint = function(fill, reveal, active, full)
+            list.Visible = (active or obj.Open) and reveal > 0
+            list.GroupTransparency = 1 - reveal
+            list.Interactable = obj.Open and reveal > 0.95
+            list.Size = UDim2.new(1, -Layout.padX * 2, 0, full)
+            local extra = if fill > 0 then DISCLOSURE_GAP + full * fill else 0
+            frame.Size = UDim2.new(1, 0, 0, Layout.buttonHeight + extra)
+        end})
+    function obj:SetOpen(open, instant)
+        open = open == true
+        if open == self.Open then return self end
+        self.Open = open
+        animate(open, instant)
+        local goal = if open then 180 else 0
+        if instant then chevron.Rotation = goal
+        else tween(chevron, Layout.transitionTime * 0.45, {Rotation = goal}, Enum.EasingStyle.Quint) end
+        return self
+    end
+    function obj:Toggle() return self:SetOpen(not self.Open) end
+    -- Option pills: the same hover as every glass control (inward settle plus a
+    -- brighter fill); the selected one stays lit.
+    local pills = {}
+    local function paintPill(pill, hovered)
+        local selected = pill:GetAttribute("Choice") == obj.Value
+        tween(pill, 0.2, {BackgroundTransparency = if hovered then 0.88 elseif selected then 0.92 else 1})
+        tween(pill.Label, 0.2, {TextColor3 = if hovered or selected then Color3.new(1, 1, 1) else Theme.mist})
+    end
     function obj:Set(value, silent)
         local found = false
         for _, choice in choices do if choice == value then found = true; break end end
         assert(found, "Dropdown value is not in Options")
         self.Value = value
         label.Text = (config.Name or "Dropdown") .. ": " .. tostring(value)
-        list.Visible = false; frame.Size = UDim2.new(1, 0, 0, Layout.buttonHeight)
+        for _, pill in pills do paintPill(pill, false) end
+        self:SetOpen(false)
         if not silent then self:_emit(value) end
         return self
     end
     function obj:Refresh(newChoices)
         assert(typeof(newChoices) == "table", "Refresh needs an array")
         choices = newChoices
-        for _, child in list:GetChildren() do if child:IsA("GuiButton") then child:Destroy() end end
-        for _, choice in choices do
-            local option = create("TextButton", {BackgroundColor3 = Theme.mist, BackgroundTransparency = 0.94,
-                BorderSizePixel = 0, Size = UDim2.new(1, 0, 0, 28), Text = tostring(choice),
-                TextColor3 = Theme.mist, TextSize = 12, FontFace = font(), ZIndex = 11, Parent = list})
-            self:Bind(option.MouseButton1Click:Connect(function() if not self.Disabled then self:Set(choice) end end))
+        for _, pill in pills do pill:Destroy() end
+        table.clear(pills)
+        for index, choice in choices do
+            local pill = create("TextButton", {Name = "Option", Text = "", AutoButtonColor = false,
+                BackgroundColor3 = Theme.mist, BackgroundTransparency = 1, BorderSizePixel = 0,
+                Size = UDim2.new(1, 0, 0, OPTION_H), LayoutOrder = index, ZIndex = 12, Parent = list})
+            pill:SetAttribute("Choice", choice)
+            corner(pill, 8)
+            create("TextLabel", {Name = "Label", BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1),
+                Text = tostring(choice), TextColor3 = Theme.mist, TextSize = 12, FontFace = font(Enum.FontWeight.Medium),
+                ZIndex = 13, Parent = pill})
+            attachHoverScale(pill)
+            self:Bind(pill.MouseEnter:Connect(function() paintPill(pill, true) end))
+            self:Bind(pill.MouseLeave:Connect(function() paintPill(pill, false) end))
+            self:Bind(pill.MouseButton1Click:Connect(function() if not self.Disabled then self:Set(choice) end end))
+            table.insert(pills, pill)
+            if choice == self.Value then pill.BackgroundTransparency = 0.92; pill.Label.TextColor3 = Color3.new(1, 1, 1) end
         end
-        list.Size = UDim2.new(1, -Layout.padX * 2, 0, #choices * 28)
+        redraw()
         return self
     end
     obj:Refresh(choices)
     obj:Bind(button.MouseButton1Click:Connect(function()
         if obj.Disabled then return end
-        list.Visible = not list.Visible
-        frame.Size = UDim2.new(1, 0, 0, Layout.buttonHeight + (if list.Visible then #choices * 28 + 2 else 0))
+        obj:Toggle()
+    end))
+    obj:Bind(button.MouseEnter:Connect(function()
+        for _, bar in chevronBars do tween(bar, 0.2, {BackgroundColor3 = Theme.mist}) end
+    end))
+    obj:Bind(button.MouseLeave:Connect(function()
+        for _, bar in chevronBars do tween(bar, 0.25, {BackgroundColor3 = Theme.mistDim}) end
     end))
     if config.CurrentValue ~= nil then obj:Set(config.CurrentValue, true) end
     return obj
@@ -6769,14 +7129,16 @@ local function addColorPicker(container, config)
     -- three sliders standing vertically to its right (H / B / A), and only the HEX
     -- row underneath.
     local INSET, KNOB, TRACK_W, HIT_W = 14, 18, 14, 26
-    local SHADE_Y, SHADE_H = 2, 160
+    local SHADE_Y, SHADE_H = 0, 160
     local COL_GAP, SIDE_GAP = 12, 14
     local SLIDERS_W = SIDE_GAP + TRACK_W * 3 + COL_GAP * 2
     local TRACK_LEN = SHADE_H - 20          -- room for the caption under each track
     local HEX_Y, HEX_H = SHADE_Y + SHADE_H + 12, 36
     local CAPTION = Layout.captionTextSize or 12
-    local bodyHeight = HEX_Y + HEX_H + 14
-    local openHeight = headerHeight + bodyHeight
+    -- the card around the body: INSET on every side (room for the knobs, which
+    -- overhang their tracks by up to 11 px, so nothing is clipped)
+    local bodyHeight = INSET + HEX_Y + HEX_H + INSET
+    local bodyTop = headerHeight + DISCLOSURE_GAP
     local radius = UDim.new(0, headerHeight / 2)
 
     local frame = row(container, config.Name or "ColorPicker", headerHeight)
@@ -6909,19 +7271,17 @@ local function addColorPicker(container, config)
         tween(bead, 0.55, {Size = UDim2.fromScale(1, 1)}, Enum.EasingStyle.Elastic)
         task.delay(0.35, function() wobbling = false end)
     end
-    local chevron = create("Frame", {Name = "Chevron", BackgroundTransparency = 1, AnchorPoint = Vector2.new(0.5, 0.5),
-        Position = UDim2.new(1, -26, 0.5, 0), Size = UDim2.fromOffset(12, 12), ZIndex = 5, Parent = header})
-    for _, side in {-1, 1} do
-        local bar = create("Frame", {BackgroundColor3 = Theme.mistDim, BorderSizePixel = 0,
-            AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, side * 2.4, 0.5, 0),
-            Size = UDim2.fromOffset(2, 8), Rotation = -side * 45, ZIndex = 5, Parent = chevron})
-        corner(bar, UDim.new(0.5, 0))
-    end
+    local chevron, chevronBars = disclosureChevron(header, UDim2.new(1, -26, 0.5, 0), 12, 5)
 
     -- Body ------------------------------------------------------------------
-    local body = create("Frame", {Name = "Body", BackgroundTransparency = 1,
-        Position = UDim2.fromOffset(INSET, headerHeight), Size = UDim2.new(1, -INSET * 2, 0, bodyHeight),
-        Visible = false, ZIndex = 3, Parent = card})
+    -- bodyGroup covers the whole liquid card (so nothing near its edge is
+    -- clipped); the controls live in `body`, INSET inside it
+    local bodyGroup = create("CanvasGroup", {Name = "Body", BackgroundTransparency = 1,
+        Position = UDim2.fromOffset(Layout.padX, bodyTop), Size = UDim2.new(1, -Layout.padX * 2, 0, bodyHeight),
+        GroupTransparency = 1, Visible = false, ZIndex = 4, Parent = frame})
+    local body = create("Frame", {Name = "Content", BackgroundTransparency = 1,
+        Position = UDim2.fromOffset(INSET, INSET), Size = UDim2.new(1, -INSET * 2, 1, -INSET * 2),
+        ZIndex = 4, Parent = bodyGroup})
 
     local shade = create("Frame", {Name = "Shade", BorderSizePixel = 0, Position = UDim2.fromOffset(0, SHADE_Y),
         Size = UDim2.new(1, -SLIDERS_W, 0, SHADE_H), ZIndex = 3, Parent = body})
@@ -7058,6 +7418,15 @@ local function addColorPicker(container, config)
     assert(typeof(initialTransparency) == "number", "ColorPicker transparency must be a number")
     obj.Transparency = math.clamp(initialTransparency, 0, 1)
     obj.Open = false
+    local animate = liquidDisclosure(frame, {inset = Layout.padX, zIndex = 3, top = bodyTop, gap = DISCLOSURE_GAP,
+        persistent = true, height = function() return bodyHeight end,
+        paint = function(fill, reveal, active, full)
+            bodyGroup.Visible = (active or obj.Open) and reveal > 0
+            bodyGroup.GroupTransparency = 1 - reveal
+            bodyGroup.Interactable = obj.Open and reveal > 0.95
+            local extra = if fill > 0 then DISCLOSURE_GAP + full * fill else 0
+            frame.Size = UDim2.new(1, 0, 0, headerHeight + extra)
+        end})
     local hue, saturation, shadeValue = obj.Value:ToHSV()
     local brightness = 0
     local editingHex = false
@@ -7121,23 +7490,14 @@ local function addColorPicker(container, config)
         if not silent then self:_emit(self.Value, transparency) end
         return self
     end
-    local openToken = 0
-    function obj:SetOpen(open)
+    function obj:SetOpen(open, instant)
         open = open == true
         if open == self.Open then return self end
         self.Open = open
-        openToken += 1
-        local token = openToken
-        local height = if open then openHeight else headerHeight
-        if open then body.Visible = true end
-        tween(frame, 0.32, {Size = UDim2.new(1, 0, 0, height)}, Enum.EasingStyle.Quint)
-        tween(card, 0.32, {Size = UDim2.new(1, -Layout.padX * 2, 0, height)}, Enum.EasingStyle.Quint)
-        tween(chevron, 0.25, {Rotation = if open then 180 else 0}, Enum.EasingStyle.Quint)
-        if not open then
-            task.delay(0.33, function()
-                if token == openToken and body.Parent then body.Visible = false end
-            end)
-        end
+        animate(open, instant)
+        local goal = if open then 180 else 0
+        if instant then chevron.Rotation = goal
+        else tween(chevron, Layout.transitionTime * 0.45, {Rotation = goal}, Enum.EasingStyle.Quint) end
         return self
     end
     function obj:Toggle() return self:SetOpen(not self.Open) end
@@ -7216,12 +7576,20 @@ local function addColorPicker(container, config)
         render()
     end))
 
-    obj:Bind(header.MouseEnter:Connect(function() tween(card, 0.2, {BackgroundTransparency = 0.9}) end))
-    obj:Bind(header.MouseLeave:Connect(function() tween(card, 0.25, {BackgroundTransparency = 0.94}) end))
+    -- same hover as every glass button: settle inward, press, brighter fill
+    attachHoverScale(header, card)
+    obj:Bind(header.MouseEnter:Connect(function()
+        tween(card, 0.2, {BackgroundTransparency = 0.9})
+        for _, bar in chevronBars do tween(bar, 0.2, {BackgroundColor3 = Theme.mist}) end
+    end))
+    obj:Bind(header.MouseLeave:Connect(function()
+        tween(card, 0.25, {BackgroundTransparency = 0.94})
+        for _, bar in chevronBars do tween(bar, 0.25, {BackgroundColor3 = Theme.mistDim}) end
+    end))
     obj:Bind(header.MouseButton1Click:Connect(function()
         if not obj.Disabled then obj:Toggle() end
     end))
-    if config.Open == true then obj:SetOpen(true) end
+    if config.Open == true then obj:SetOpen(true, true) end
     return obj
 end
 local factories = {CreateLabel = addLabel, CreateParagraph = addParagraph, CreateDivider = addDivider, CreateButton = addButton,
@@ -7244,7 +7612,7 @@ function window:CreateTab(name, icon)
     function tab:CreateSection(title, sectionOptions)
         local section = {Name = title}
         local holder = row(self.content, title, 0)
-        holder.AutomaticSize = Enum.AutomaticSize.Y
+        holder.AutomaticSize = Enum.AutomaticSize.None
         -- Heading: TITLE ─────── with half a tapered divider after the title, thick
         -- and glowing next to the text and thinning out toward the right edge.
         -- rest tint (multiplied with the glint gradient); hover brightens it to white
@@ -7325,16 +7693,32 @@ function window:CreateTab(name, icon)
             corner(line, UDim.new(0.5, 0))
             create("UIGradient", {Transparency = halfFade, Parent = line})
         end
+        local reveal = create("CanvasGroup", {Name = "LiquidReveal", BackgroundTransparency = 1,
+            Position = UDim2.fromOffset(0, HEAD_H + 4), Size = UDim2.new(1, 0, 0, 0),
+            ClipsDescendants = true, Parent = holder})
         local content = create("Frame", {Name = "Items", BackgroundTransparency = 1,
-            Position = UDim2.fromOffset(0, HEAD_H + 6), Size = UDim2.new(1, 0, 0, 0),
-            AutomaticSize = Enum.AutomaticSize.Y, Parent = holder})
+            Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, Parent = reveal})
         create("UIListLayout", {Padding = UDim.new(0, Layout.itemGap), SortOrder = Enum.SortOrder.LayoutOrder, Parent = content})
-        local padding = create("UIPadding", {PaddingBottom = UDim.new(0, 20), Parent = holder})
         section.Instance = holder
         installFactories(section, content)
+        local animate, redraw = liquidDisclosure(holder, {inset = Layout.padX, zIndex = 2, top = HEAD_H + 6,
+            height = function() return content.AbsoluteSize.Y / math.max(0.001, root.AbsoluteSize.X / root.Size.X.Offset) end,
+            paint = function(fill, opacity, active, full)
+                local height = full * fill
+                reveal.Size = UDim2.new(1, 0, 0, math.ceil(height) + 4)
+                reveal.GroupTransparency = 1 - opacity
+                reveal.Interactable = not section.Collapsed and opacity > 0.95
+                local settled = not active and fill == 1
+                reveal.Visible = not settled and fill > 0
+                local parent = if settled then holder else reveal
+                if content.Parent ~= parent then content.Parent = parent end
+                content.Position = UDim2.fromOffset(0, if settled then HEAD_H + 6 else 2)
+                holder.Size = UDim2.new(1, 0, 0, HEAD_H + 6 + height + 10 + fill * 10)
+            end})
+        track(content:GetPropertyChangedSignal("AbsoluteSize"):Connect(redraw))
+        animate(true, true)
 
-        -- Click the heading to collapse/expand the section (instant for now, like
-        -- the dropdown; to be replaced with a liquid animation later).
+        -- The heading controls the same liquid reveal as the other disclosures.
         local headButton = create("TextButton", {Name = "HeadingButton", Text = "", AutoButtonColor = false,
             BackgroundTransparency = 1, Position = UDim2.fromOffset(Layout.padX, 0),
             Size = UDim2.new(1, -Layout.padX * 2, 0, HEAD_H), ZIndex = 3, Parent = holder})
@@ -7349,13 +7733,13 @@ function window:CreateTab(name, icon)
             table.insert(chevronBars, bar)
         end
         section.Collapsed = false
-        function section:SetCollapsed(collapsed)
+        function section:SetCollapsed(collapsed, instant)
             collapsed = collapsed == true
             if collapsed == self.Collapsed then return self end
             self.Collapsed = collapsed
-            content.Visible = not collapsed
-            padding.PaddingBottom = UDim.new(0, if collapsed then 10 else 20)
-            chevron.Rotation = if collapsed then -90 else 0
+            animate(not collapsed, instant)
+            if instant then chevron.Rotation = if collapsed then -90 else 0
+            else tween(chevron, Layout.transitionTime * 0.45, {Rotation = if collapsed then -90 else 0}) end
             return self
         end
         function section:Toggle() return self:SetCollapsed(not self.Collapsed) end
@@ -7369,7 +7753,7 @@ function window:CreateTab(name, icon)
         track(headButton.MouseEnter:Connect(function() setHover(true) end))
         track(headButton.MouseLeave:Connect(function() setHover(false) end))
         track(headButton.MouseButton1Click:Connect(function() section:Toggle() end))
-        if typeof(sectionOptions) == "table" and sectionOptions.Collapsed == true then section:SetCollapsed(true) end
+        if typeof(sectionOptions) == "table" and sectionOptions.Collapsed == true then section:SetCollapsed(true, true) end
 
         function section:Destroy() holder:Destroy() end
         return section

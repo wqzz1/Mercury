@@ -51,6 +51,7 @@ local function updateDrag(input: InputObject)
             return
         end
         drag.active = true
+        if Resize.syncBones then Resize.syncBones() end
         skeletonGhost.Visible = true
         tween(skeletonGroup, 0.18, { GroupTransparency = 0 })
         if skeletonGlow then
@@ -1063,7 +1064,9 @@ local material=(function()
    end
    if rowsMode then strip.rows:WritePixelsBuffer(Vector2.zero,Vector2.new(n,BLOCK),buf) else strip.cols:WritePixelsBuffer(Vector2.zero,Vector2.new(BLOCK,n),buf) end
    strip.rowsMode,strip.c,strip.s,strip.start,strip.used=rowsMode,c,s,start,used
-   strip.ccx,strip.ccy=ox+frame.Position.X.Scale*A.w,oy+frame.Position.Y.Scale*A.h
+   -- origin-free: compose adds its own (ox,oy), so two composes for different
+   -- targets (one may be suspended mid-way) never misplace each other's veins
+   strip.ccx,strip.ccy=frame.Position.X.Scale*A.w,frame.Position.Y.Scale*A.h
   end
  end
  -- withTop=false leaves gloss/vignette to the panel's own GUI frames (plain vertical
@@ -1099,12 +1102,12 @@ local material=(function()
     for _,strip in ipairs(A.veins) do
      if strip.rowsMode then
       for yb=ry0,ry1-1,BLOCK do
-       local xs=round(strip.ccx+(strip.start-(yb+BLOCK/2-strip.ccy)*strip.s)/strip.c)
+       local xs=round(ox+strip.ccx+(strip.start-(yb+BLOCK/2-oy-strip.ccy)*strip.s)/strip.c)
        if xs<rx1 and xs+strip.used>rx0 then image:DrawImage(Vector2.new(xs-tx,yb-ty),strip.rows,OVER) end
       end
      else
       for xb=rx0,rx1-1,BLOCK do
-       local ys=round(strip.ccy+(strip.start-(xb+BLOCK/2-strip.ccx)*strip.c)/strip.s)
+       local ys=round(oy+strip.ccy+(strip.start-(xb+BLOCK/2-ox-strip.ccx)*strip.c)/strip.s)
        if ys<ry1 and ys+strip.used>ry0 then image:DrawImage(Vector2.new(xb-tx,ys-ty),strip.cols,OVER) end
       end
      end
@@ -1212,6 +1215,34 @@ local material=(function()
   if not assets then return nil end
   return composeSheet(px,py)
  end
+ -- A small region composed fresh on demand (sub-pixel smooth lava), for liquid
+ -- that must flow at full frame rate: the notification card while it is up and
+ -- disclosures while they move. The sheet only refreshes SHEET_RATE times a
+ -- second, which read as a ~10 fps marble on anything that sits still. Each
+ -- caller keeps its own target; it grows in 32 px steps and is never shrunk.
+ -- (px,py): the panel's top-left in the caller's image; (x0,y0,w,h): the area
+ -- needed, in the same space. Returns pixels, origin and size like sheetAt.
+ local regions={}
+ function m.regionAt(key,px,py,x0,y0,w,h)
+  if not assets then return nil end
+  x0,y0=floor(x0),floor(y0)
+  w,h=max(1,ceil(w)),max(1,ceil(h))
+  local r=regions[key]
+  if not r or r.w<w or r.h<h then
+   if r then destroyTiles(r.tiles) end
+   local cw,ch=ceil(w/32)*32,ceil(h/32)*32
+   r={w=cw,h=ch,tiles=tiled(cw,ch,128),pixels=buffer.create(cw*ch*4)}
+   regions[key]=r
+  end
+  -- whole-pixel lava like the sheet: the smooth (resampled) path rounds down
+  -- once more per blend and read ~3 levels darker than the panel
+  compose(r.tiles,px-x0,py-y0,0,0,r.w,h,r.pixels,r.w,true,false,false)
+  return r.pixels,x0,y0,r.w,h
+ end
+ function m.releaseRegion(key)
+  local r=regions[key]
+  if r then destroyTiles(r.tiles);regions[key]=nil end
+ end
  -- Idle bubble: the marble drifts slowly, so it is rebuilt BUBBLE_RATE times a
  -- second in the background (into a second buffer, swapped in when done) while
  -- the outline itself redraws every frame from the latest finished marble.
@@ -1283,8 +1314,11 @@ local material=(function()
   end)
   if not ok then warn('[LiquidMaterial] lava texture unavailable',err) end
   -- The lava texture is magnified ~5x on screen, so its texels showed as grain
-  -- and steps. Build a smooth 3x copy once (Catmull-Rom, separable, wrapping the
-  -- seamless tile), in the background, then switch the panel and the liquid to it.
+  -- and steps. Build a smooth 3x copy once (cubic B-spline, separable, wrapping
+  -- the seamless tile), in the background, then switch the panel and the liquid
+  -- to it. B-spline rather than Catmull-Rom: Catmull-Rom passes through every
+  -- source texel and overshoots, so the tile's speckle survived as dotted halos
+  -- along the strands; the B-spline is C2-smooth with no ringing.
   if not texture then return end
   local ok2,err2=pcall(function()
    local F=3
@@ -1292,8 +1326,9 @@ local material=(function()
    local px=texture:ReadPixelsBuffer(Vector2.zero,texture.Size)
    local function ch(x,y,c) return buffer.readu8(px,((y%tile)*src+(x%tile))*4+c) end
    local function weights(t)
+    local u=1-t
     local t2,t3=t*t,t*t*t
-    return -.5*t3+t2-.5*t, 1.5*t3-2.5*t2+1, -1.5*t3+2*t2+.5*t, .5*t3-.5*t2
+    return u*u*u/6, (3*t3-6*t2+4)/6, (-3*t3+3*t2+3*t+1)/6, t3/6
    end
    local H=tile*F
    -- horizontal pass: tile x tile -> H x tile (float channels)
@@ -1343,6 +1378,7 @@ local material=(function()
   if not ok2 then warn('[LiquidMaterial] smooth lava unavailable',err2) end
  end)
  function m.destroy()
+  for key in pairs(regions) do m.releaseRegion(key) end
   local stars=Liquid.stars
   if stars then Liquid.stars=nil;stars.free() end
   release(assets);assets=nil
@@ -1776,6 +1812,7 @@ do
  local function crossing(f) local lo,hi=margin-12,margin+radius;for _=1,40 do local mid=(lo+hi)/2;if f(mid)>=.47917 then hi=mid else lo=mid end end;return hi end
  if ok then
   contourOut=clamp(margin-crossing(function(t) return field(t,side/2) end),0,4)
+  Resize.contourOut=contourOut
   if contourOut>.02 then
    local o=contourOut
    P={x=margin+o,y=margin+o,w=side-2*margin-2*o,h=side-2*margin-2*o,r=max(1,radius-o)}
@@ -2573,7 +2610,9 @@ local function shadeCells(iy,ix,endX,mat,phase)
         local shine=rimLookup[key]*(.18+.82*light)*.8+broadLookup[key]*light;if shine>1 then shine=1 end
         local off=(y*OW+x)*4
         if rimMode then
-         write(pixels,off,16777215+floor(alpha*shine*255+.5)*16777216)
+         -- 'tint' bakes the rim colour into the pixels (label stays white), so a
+         -- surface can switch between liquid and rim pictures without a colour flash
+         write(pixels,off,(rimMode=='tint' and RIM_R+RIM_G*256+RIM_B*65536 or 16777215)+floor(alpha*shine*255+.5)*16777216)
         elseif mat then
          local mx,my=x-matX,y-matY
          if mx<0 or my<0 or mx>=matW or my>=matH then mx,my=mirror(mx,matW),mirror(my,matH) end
@@ -2850,6 +2889,174 @@ local function perimeter(w,h,r) return 2*(w-2*r)+2*(h-2*r)+2*pi*r end
 
 local jobs={}
 local stopped=false
+
+-- Disclosures (dropdown lists, picker bodies, sections) share the panel-piece
+-- renderer and its paced job queue. While moving, a neck grows into a hanging
+-- drop that spreads into the rounded card; once a persistent card is open its
+-- rim is baked once and nothing renders again until it resizes or retints.
+function Resize.createDisclosure(host,inset,zIndex,persistent)
+ local label=create('ImageLabel',{Name='LiquidDisclosure',BackgroundTransparency=1,Visible=false,ZIndex=zIndex,Parent=host})
+ passThrough(label)
+ local data={p=0,top=0,height=0,surface=nil,ready=-1,dead=false,rimKey=nil,drawn=nil,
+  vel=0,lastP=0,lastT=os.clock(),cost=1/60,shownLen=nil,pending=nil,w=0,h=0,scale=1}
+ local PAD=24
+ local function ease(t) t=clamp(t,0,1);return t*t*(3-2*t) end
+ local job={name='disclosure',interval=0,elapsed=1}
+ local function hostShown()
+  if data.dead or not host.Parent or Resize.animating or Resize.minimized then return false end
+  local ancestor=host
+  while ancestor and ancestor~=screenGui do
+   if ancestor:IsA('GuiObject') and not ancestor.Visible then return false end
+   ancestor=ancestor.Parent
+  end
+  return true
+ end
+ local function geometry()
+  local scale=root.AbsoluteSize.X/math.max(1,root.Size.X.Offset)
+  local width=max(8,host.AbsoluteSize.X-inset*2*scale)
+  local height=min(900,data.height*scale)
+  return scale,width,height
+ end
+ local function lengthAt(p,height) local o=Resize.contourOut or 0;return max(2,max(2,height-2*o)*ease(p/.65)) end
+ local function rimKeyNow()
+  local scale,width,height=geometry()
+  return string.format('%d|%d|%.3f|%d|%d|%d',floor(width+.5),floor(height+.5),scale,RIM_R,RIM_G,RIM_B)
+ end
+ local function mode()
+  if data.dead or data.p<=0 or data.height<=0 then return nil end
+  if data.p<1 then return 'liquid' end
+  return persistent and 'rim' or nil
+ end
+ -- Place the label. Between liquid pictures the last one is stretched along
+ -- the drop's length on the GPU (anchored at the top, where it hangs from), so
+ -- the growth moves at the game's frame rate while the shape detail updates as
+ -- fast as the CPU allows.
+ local function place()
+  local scale=data.scale;local w,h=data.w,data.h
+  local f=1
+  if data.drawn=='liquid' and data.shownLen then
+   local _,_,height=geometry()
+   f=clamp(lengthAt(data.p,height)/data.shownLen,.8,1.25)
+  end
+  label.Position=UDim2.fromOffset(inset-PAD/scale,data.top-PAD*f/scale)
+  label.Size=UDim2.fromOffset(w/scale,h*f/scale)
+ end
+ job.active=function()
+  local m=mode()
+  if not m then
+   if label.Visible then label.Visible=false end
+   data.ready=-1;data.drawn=nil;data.rimKey=nil;data.pending=nil;data.shownLen=nil
+   return false
+  end
+  if data.ready>0 then data.ready-=1 end
+  -- a finished picture's pixels reach the screen one frame after they are
+  -- written: switch the stretch reference in that same frame
+  if data.pending then
+   local pend=data.pending;data.pending=nil
+   data.shownLen=pend.len;data.drawn=pend.mode;data.w,data.h,data.scale=pend.w,pend.h,pend.scale
+  end
+  label.Visible=data.surface~=nil and data.ready==0 and data.drawn~=nil
+  if data.drawn then place() end
+  if not persistent then label.ImageTransparency=ease((data.p-.78)/.22) end
+  if not hostShown() then return false end
+  if m=='liquid' then return true end
+  return data.rimKey~=rimKeyNow()
+ end
+ job.run=function()
+  local m=mode();if not m then return end
+  local started=os.clock()
+  local scale,width,height=geometry()
+  local w,h=ceil((width+PAD*2)/2)*2,ceil((height+PAD*2)/2)*2
+  if not data.surface or data.surface.OW~=w or data.surface.OH~=h then
+   if data.surface then data.surface.image:Destroy() end
+   data.surface=newSurface(w,h);data.ready=-1;data.drawn=nil;data.shownLen=nil
+   label.ImageContent=Content.fromObject(data.surface.image)
+   data.w,data.h,data.scale=w,h,scale
+  end
+  -- draw for the moment the picture will be on screen: one render plus the
+  -- one-frame upload lag ahead along the current motion
+  local p=1
+  if m=='liquid' then
+   local lead=data.cost+1/60
+   p=clamp(data.p+data.vel*lead,0,1)
+   if data.vel>0 then p=min(p,.999) end
+  end
+  local o=Resize.contourOut or 0
+  local cw=max(4,width-2*o)
+  local length=lengthAt(p,height)
+  local spread=ease((p-.23)/.55)
+  -- while it is still a drip the neck reaches up across the gap and hangs from
+  -- the button; it lets go as the drop spreads into the card
+  local lift=(data.gap or 0)*scale*(1-spread)
+  local radius=min(max(1,12*scale-o),length/2,cw/2)
+  local bulb=min(cw*.15,max(3,length*.28))
+  local neck=min(cw*.045,max(1,length*.1))
+  -- sample heights: a few along the neck in the gap, dense around the rounded
+  -- corners (so the flat top and bottom stay flat), even in between
+  local ys={}
+  if lift>.5 then for i=0,3 do ys[#ys+1]=-lift+lift*i/4 end end
+  local CORNER,MIDDLE=8,24
+  for i=0,CORNER-1 do ys[#ys+1]=radius*(1-math.cos(i/CORNER*pi/2)) end
+  for i=0,MIDDLE do ys[#ys+1]=radius+(length-2*radius)*i/MIDDLE end
+  for i=1,CORNER do ys[#ys+1]=length-radius+radius*math.sin(i/CORNER*pi/2) end
+  local points={};local left,right={},{}
+  for index,y in ipairs(ys) do
+   local i=40*clamp(y/max(1,length),0,1)
+   local edge=max(0,radius-y,y-(length-radius))
+   if y<0 then edge=0 end
+   local rect=cw/2-radius+sqrt(max(0,radius*radius-edge*edge))
+   local dy=y-(length-bulb)
+   local drop=sqrt(max(0,bulb*bulb-dy*dy))
+   if y<length-bulb then drop=max(neck,drop) end
+   local half=if y<0 then neck else drop+(rect-drop)*spread
+   local sway=sin(p*pi)*sin(i/40*pi)*cw*.025*(1-spread)
+   left[#left+1]={PAD+width/2+sway-half,PAD+o+y}
+   right[#right+1]={PAD+width/2+sway+half,PAD+o+y}
+  end
+  for _,point in ipairs(left) do points[#points+1]=point end
+  for i=#right,1,-1 do points[#points+1]=right[i] end
+  -- Rim-only pictures, moving or not: the liquid's inside is transparent, so
+  -- the panel's own marble shows through it live (a CPU copy of the marble
+  -- never matched the GPU panel exactly and only refreshed a few times a
+  -- second). Rim-only shading also skips all interior work, so pictures are
+  -- far cheaper and come several times more often.
+  use(data.surface);clearRow=nil;postProcess=nil
+  rimMode='tint';material.compose=nil
+  local ok=pcall(render,points,{})
+  rimMode=false
+  if not ok then return end
+  data.rimKey=if m=='rim' then rimKeyNow() else nil
+  data.cost=data.cost*.6+(os.clock()-started)*.4
+  data.pending={mode=m,len=length,w=w,h=h,scale=scale}
+  if data.ready<0 then data.ready=2 end
+ end
+ -- called when the job goes idle (or its render was cut short): a baked rim
+ -- stays on screen; anything else is dropped. A cut-short rim render must not
+ -- leave the shared renderer in rim mode.
+ job.reset=function()
+  rimMode=false
+  if mode()=='rim' and data.drawn=='rim' and data.rimKey then return end
+  label.Visible=false;data.ready=-1;data.drawn=nil;data.rimKey=nil;data.pending=nil;data.shownLen=nil
+ end
+ jobs[#jobs+1]=job
+ track(host.Destroying:Connect(function()
+  data.dead=true;label.Visible=false
+  if data.surface then data.surface.image:Destroy();data.surface=nil end
+ end))
+ return function(p,top,height,gap)
+  data.gap=gap
+  local now=os.clock()
+  if math.abs(top-data.top)>.01 then data.rimKey=nil end
+  local dt=now-data.lastT
+  if dt>.001 then
+   local v=(p-data.lastP)/dt
+   if p<=0 or p>=1 then v=0 end
+   data.vel=data.vel*.5+v*.5;data.lastP=p;data.lastT=now
+  end
+  data.p=p;data.top=top;data.height=height
+  if data.drawn then place() end
+ end
+end
 
 -- Header logo: a tiny copy of the minimized bubble, rendered 4x larger and
 -- reduced natively, playing with up to two droplets of its own (3 bodies max).
@@ -3683,7 +3890,7 @@ ch:Fire('ready')
   return true
  end
  local function liveDraw(ox,oy)
-  local mat,mx,my,mw,mh=shared.material.sheetAt(-ox,-oy)
+  local mat,mx,my,mw,mh=shared.material.regionAt('toast',-ox,-oy,live.x0,live.y0,live.w,live.h)
   if not mat then return end
   local w,h,x0,y0=live.w,live.h,live.x0,live.y0
   -- source index per card pixel (mirrored past the sheet), rebuilt when the sheet's geometry changes

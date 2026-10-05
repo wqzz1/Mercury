@@ -155,12 +155,15 @@ local function collectFade(rootObject: Instance, skip: { [Instance]: boolean }?)
         end
         if object:IsA("GuiObject") then
             table.insert(entries, { instance = object, property = "BackgroundTransparency", base = object.BackgroundTransparency })
-            if object:IsA("TextLabel") or object:IsA("TextButton") then
+            if object:IsA("TextLabel") or object:IsA("TextButton") or object:IsA("TextBox") then
                 -- Status lines can be mid-tween when the snapshot is taken; their
                 -- FadeTarget is where they're heading, so fade to that instead.
                 local target = object:GetAttribute("FadeTarget")
                 local base = if typeof(target) == "number" then target else object.TextTransparency
                 table.insert(entries, { instance = object, property = "TextTransparency", base = base })
+            end
+            if object:IsA("ScrollingFrame") then
+                table.insert(entries, { instance = object, property = "ScrollBarImageTransparency", base = object.ScrollBarImageTransparency })
             end
         elseif object:IsA("UIStroke") then
             table.insert(entries, { instance = object, property = "Transparency", base = object.Transparency })

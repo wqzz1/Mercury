@@ -208,7 +208,7 @@ dropdown:Set("B")
 dropdown:Refresh({"B", "D"})
 ```
 
-`Set` requires a value present in `Options`. `Refresh` replaces the visible choices; set a new value afterwards if the previous one is no longer present.
+`Set` requires a value present in `Options`. `Refresh` replaces the visible choices; set a new value afterwards if the previous one is no longer present. Click the button (or call `dropdown:SetOpen(true/false)` / `dropdown:Toggle()`) to open the list; `dropdown.Open` tells you the current state. Picking an option closes it.
 
 ### Text input
 
