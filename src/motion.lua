@@ -919,7 +919,7 @@ local material=(function()
    end
    if yield and os.clock()-slice>.002 then task.wait();slice=os.clock() end
   end
-  local result={w=Wp,h=Hp,k=k,bw=BW,bh=BH,orbs={},lava={},veins={},textured=texture~=nil}
+  local result={w=Wp,h=Hp,k=k,bw=BW,bh=BH,orbs={},lava={},veins={},tex=texture}
   result.base=newImage(BW,BH);result.base:WritePixelsBuffer(Vector2.zero,Vector2.new(BW,BH),baseBuf)
   result.top=newImage(BW,BH);result.top:WritePixelsBuffer(Vector2.zero,Vector2.new(BW,BH),topBuf)
   for i,orb in ipairs(orbData) do
@@ -957,7 +957,12 @@ local material=(function()
  end
  local function panelSize() return Vector2.new(root.Size.X.Offset,root.Size.Y.Offset)*Layout.uiScale end
  m.panelSize=panelSize
- local function matches(set,size) return set~=nil and set.textured==(texture~=nil) and math.abs(set.w-size.X)<.5 and math.abs(set.h-size.Y)<.5 end
+ -- A set is only valid for the texture it was built from: a background build
+ -- that started on the low-res lava and finished after the switch to the smooth
+ -- copy was installed anyway, and then read the (3x larger) hi-res offsets with
+ -- low-res tiles, so the liquid's marble sat in a different place than the
+ -- panel's (the pattern visibly jumped when the window turned to liquid).
+ local function matches(set,size) return set~=nil and set.tex==texture and math.abs(set.w-size.X)<.5 and math.abs(set.h-size.Y)<.5 end
  -- A theme change recolours the backdrop instances; read their colours again,
  -- re-bake the orb glows in place and rebuild the per-size layers.
  -- resolve(colour) -> colour maps the window's current colours to the target
@@ -1322,7 +1327,7 @@ local material=(function()
   task.spawn(function()
    local ok,err=pcall(function()
     local built=build(size.X,size.Y,true)
-    if stopped or matches(assets,size) then release(built) else local old=assets;assets=built;release(old) end
+    if stopped or matches(assets,size) or built.tex~=texture then release(built) else local old=assets;assets=built;release(old) end
    end)
    if not ok then warn('[LiquidMaterial]',err) end
    m.building=false;dirtySince=nil
