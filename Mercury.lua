@@ -3063,11 +3063,31 @@ local material=(function()
  -- limited to the region [x0,x1) x [y0,y1) in target pixels.
  -- Each vein is a soft band across a rotated frame: one 1-D strip per update,
  -- blitted every BLOCK rows (or columns for steep angles) at its sheared offset.
- local function prepareVeins(A,ox,oy)
+ -- A compose can be spread over several frames (it yields between layers) and
+ -- several composes can interleave (sheet task, inline stale sheet, bubble,
+ -- notification region). Every moving input is therefore read ONCE per compose
+ -- into a snapshot, and the shared vein strip images are re-prepared from that
+ -- snapshot whenever another compose overwrote them in between. Reading them
+ -- live per strip drew neighbouring 128-row strips at different moments, which
+ -- showed as horizontal cuts across the marble.
+ local veinSnap=nil
+ local function snapshotLayers(A)
+  local snap={veins={},orbs={},lava={}}
   for i,vein in ipairs(veinData) do
-   local strip=A.veins[i];local frame=vein.frame
-   local angle=math.rad(frame.Rotation);local c,s=cos(angle),sin(angle)
-   local L=frame.Size.X.Scale*A.w;local offset=vein.gradient.Offset.X
+   local frame=vein.frame
+   snap.veins[i]={rotation=frame.Rotation,length=frame.Size.X.Scale,offset=vein.gradient.Offset.X,
+    px=frame.Position.X.Scale,py=frame.Position.Y.Scale}
+  end
+  for i,orb in ipairs(A.orbs) do snap.orbs[i]=orb.frame.Position end
+  for i,lava in ipairs(A.lava) do snap.lava[i]=lava.label.ImageRectOffset end
+  return snap
+ end
+ local function prepareVeins(A,snap)
+  veinSnap=snap
+  for i,vein in ipairs(veinData) do
+   local strip=A.veins[i];local v=snap.veins[i]
+   local angle=math.rad(v.rotation);local c,s=cos(angle),sin(angle)
+   local L=v.length*A.w;local offset=v.offset
    local lo,hi=(vein.lo+offset-.5)*L,(vein.hi+offset-.5)*L
    local rowsMode=math.abs(c)>=math.abs(s);local dir=rowsMode and c or s
    local start=dir>0 and lo or hi
@@ -3086,7 +3106,7 @@ local material=(function()
    strip.rowsMode,strip.c,strip.s,strip.start,strip.used=rowsMode,c,s,start,used
    -- origin-free: compose adds its own (ox,oy), so two composes for different
    -- targets (one may be suspended mid-way) never misplace each other's veins
-   strip.ccx,strip.ccy=frame.Position.X.Scale*A.w,frame.Position.Y.Scale*A.h
+   strip.ccx,strip.ccy=v.px*A.w,v.py*A.h
   end
  end
  -- withTop=false leaves gloss/vignette to the panel's own GUI frames (plain vertical
@@ -3105,20 +3125,22 @@ local material=(function()
  local function compose(targetTiles,ox,oy,x0,y0,x1,y1,readback,stride,withTop,smooth,bubble)
   local A=assets;local Wp,Hp=A.w,A.h
   local bx,by=round(ox)-MARGIN,round(oy)-MARGIN
-  prepareVeins(A,ox,oy)
+  local snap=snapshotLayers(A)
+  prepareVeins(A,snap)
+  local function resume() pace();if veinSnap~=snap then prepareVeins(A,snap) end end
   for _,T in ipairs(targetTiles) do
    local rx0,ry0,rx1,ry1=max(x0,T.x),max(y0,T.y),min(x1,T.x+T.w),min(y1,T.y+T.h)
    if rx1>rx0 and ry1>ry0 then
     local image,tx,ty=T.image,T.x,T.y
     image:DrawRectangle(Vector2.new(rx0-tx,ry0-ty),Vector2.new(rx1-rx0,ry1-ry0),INK,0,WRITE)
     image:DrawImage(Vector2.new(bx-tx,by-ty),A.base,WRITE)
-    pace()
-    for _,orb in ipairs(A.orbs) do
-     local position=orb.frame.Position
+    resume()
+    for i,orb in ipairs(A.orbs) do
+     local position=snap.orbs[i]
      local cx0,cy0=ox+position.X.Scale*Wp+position.X.Offset*A.k,oy+position.Y.Scale*Hp+position.Y.Offset*A.k
      image:DrawImage(Vector2.new(round(cx0-orb.size/2)-tx,round(cy0-orb.size/2)-ty),orb.image,OVER)
     end
-    pace()
+    resume()
     for _,strip in ipairs(A.veins) do
      if strip.rowsMode then
       for yb=ry0,ry1-1,BLOCK do
@@ -3132,9 +3154,9 @@ local material=(function()
       end
      end
     end
-    pace()
-    for _,lava in ipairs(A.lava) do
-     local rectOffset=lava.label.ImageRectOffset;local P=lava.period
+    resume()
+    for i,lava in ipairs(A.lava) do
+     local rectOffset=snap.lava[i];local P=lava.period
      local gx,gy=ox+(lava.anchor-rectOffset.X)*lava.scale,oy+(lava.anchor-rectOffset.Y)*lava.scale
      if smooth then
       -- Tile the lava seamlessly at whole pixels into a scratch one pixel larger
@@ -3156,7 +3178,7 @@ local material=(function()
        for _,sub in ipairs(lava.subs) do image:DrawImage(Vector2.new(px+sub.x-tx,py+sub.y-ty),sub.image,OVER) end
       end end
      end
-     pace()
+     resume()
     end
     -- twinkling stars (shared with the panel; the bubble adds its own)
     local stars=Liquid.stars
