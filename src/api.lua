@@ -1367,8 +1367,10 @@ window.Attributes = {}
 function window:SetAttribute(key, value) self.Attributes[key] = value; screenGui:SetAttribute(key, value); return self end
 function window:GetAttribute(key) return self.Attributes[key] end
 function window:SelectTab(name) return selectTab(name) end
+local introState = {notifications = {}, loaded = false} -- notifications sent while the intro plays
 function window:Notify(config)
     assert(typeof(config) == "table", "Notify needs an options table")
+    if Resize.intro then table.insert(introState.notifications, config); return end
     -- optional status badge: Type = "Success" | "Error" (Flag is accepted as an alias)
     showToast(config.Title or "", config.Content or "", config.Duration, config.Type or config.Flag)
 end
@@ -1425,5 +1427,208 @@ do
 end
 if typeof(options.Theme) == "table" then window:SetTheme(options.Theme)
 elseif initialTheme and initialTheme ~= "Default" then window:SetTheme(initialTheme) end
-task.defer(function() if not state.destroyed then open() end end)
+
+-- Intro --------------------------------------------------------------------------
+-- Liquid pours in from the screen edges and fills a landscape window; "Mercury",
+-- the window's name and a loading ring fade in; once the script has finished
+-- building its UI they fade out and the window flows into its portrait size.
+-- Options.Intro = false skips it; Options.Intro = {Manual = true} keeps the ring
+-- up until window:FinishLoading() is called (otherwise loading is detected: no
+-- new UI for a moment, plus Mercury's own start-up work).
+function window:FinishLoading() introState.loaded = true; return self end
+do -- scoped: CreateWindow is close to Luau's 200-local limit
+local introOptions = if typeof(options.Intro) == "table" then options.Intro else {}
+local introEnabled = options.Intro ~= false and Resize.liquid ~= nil and Resize.liquid.introPour ~= nil
+    and Layout.performance ~= "Low"
+-- flagged right away: a Notify sent straight after CreateWindow (before the
+-- deferred start below) must already wait for the intro
+if introEnabled then Resize.intro = true end
+local function startIntro()
+    local liquid = Resize.liquid
+    if not introEnabled then
+        open(); return
+    end
+    local k = Layout.uiScale
+    local portrait = Vector2.new(root.Size.X.Offset, root.Size.Y.Offset)
+    local landscape = Vector2.new(portrait.Y, portrait.X)
+    local function centerRoot()
+        root.Position = UDim2.new(
+            0.5, -math.round(root.Size.X.Offset * k / 2) - screenGui.AbsolutePosition.X,
+            0.5, -math.round(root.Size.Y.Offset * k / 2) - screenGui.AbsolutePosition.Y)
+        skeletonGhost.Position = root.Position
+    end
+    -- everything inside the panel except its glass stays hidden until the end
+    -- (new controls created meanwhile land inside these and stay hidden too)
+    local hidden = {}
+    for _, child in panel:GetChildren() do
+        -- (liquid pieces such as edge droplets manage their own visibility: leave them)
+        if child:IsA("GuiObject") and not child:IsA("ImageLabel") and child.Visible and child ~= backdrop
+            and child ~= toast and child.Name ~= "Lens" and child.Name ~= "Rim" then
+            child.Visible = false
+            table.insert(hidden, child)
+        end
+    end
+    -- overlay: title, window name, loading ring
+    local overlay = create("Frame", {Name = "IntroOverlay", BackgroundTransparency = 1,
+        Size = UDim2.fromScale(1, 1), ZIndex = 40, Visible = false, Parent = root})
+    passThrough(overlay)
+    local TITLE_Y = math.round(landscape.Y * 0.24)
+    local title = create("TextLabel", {Name = "Title", BackgroundTransparency = 1, AnchorPoint = Vector2.new(0.5, 0),
+        Position = UDim2.new(0.5, 0, 0, TITLE_Y), Size = UDim2.new(1, -40, 0, 44),
+        FontFace = font(Enum.FontWeight.Bold), Text = "Mercury", TextSize = 36, -- 2x the game name
+        TextColor3 = Color3.new(1, 1, 1), TextTransparency = 1, ZIndex = 41, Parent = overlay})
+    create("UIGradient", {Rotation = 90, Color = colorSeq({{0, Color3.new(1, 1, 1)}, {1, Theme.mist}}), Parent = title})
+    local windowName = if typeof(options.Name) == "string" and options.Name ~= "" then options.Name else nil
+    local nameLabel = create("TextLabel", {Name = "WindowName", BackgroundTransparency = 1, AnchorPoint = Vector2.new(0.5, 0),
+        Position = UDim2.new(0.5, 0, 0, TITLE_Y + 46), Size = UDim2.new(1, -40, 0, 20),
+        FontFace = font(Enum.FontWeight.SemiBold), Text = windowName or "", TextSize = 15,
+        TextColor3 = Theme.mistDim, TextTransparency = 1, TextTruncate = Enum.TextTruncate.AtEnd,
+        Visible = windowName ~= nil, ZIndex = 41, Parent = overlay})
+    local RING = 30
+    local ring = create("Frame", {Name = "Loading", BackgroundTransparency = 1, AnchorPoint = Vector2.new(0.5, 0),
+        Position = UDim2.new(0.5, 0, 0, TITLE_Y + (if windowName then 92 else 70)), Size = UDim2.fromOffset(RING, RING),
+        ZIndex = 41, Parent = overlay})
+    corner(ring, UDim.new(0.5, 0))
+    local ringTrack = create("UIStroke", {Color = Theme.mist, Thickness = 2.5, Transparency = 1, Parent = ring})
+    local arcFrame = create("Frame", {Name = "Arc", BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), ZIndex = 42, Parent = ring})
+    corner(arcFrame, UDim.new(0.5, 0))
+    local arc = create("UIStroke", {Color = Theme.mist, Thickness = 2.5, Transparency = 1, Parent = arcFrame})
+    -- a comet: bright head fading into a tail over about a third of the ring
+    local arcGradient = create("UIGradient", {Transparency = numberSeq({{0, 1}, {0.5, 1}, {0.62, 0.75}, {0.9, 0.12}, {1, 0}}), Parent = arc})
+
+    local finished = false
+    local function cleanupOverlay() if overlay.Parent then overlay:Destroy() end end
+    local function flushNotifications()
+        local queued = table.clone(introState.notifications)
+        table.clear(introState.notifications)
+        for index, config in queued do
+            task.delay((index - 1) * 0.35, function()
+                if not state.destroyed and not state.closing then window:Notify(config) end
+            end)
+        end
+    end
+    -- anything going wrong: show the window the ordinary way
+    local function fallback()
+        if finished then return end
+        finished = true
+        pcall(liquid.introAbort)
+        Resize.intro = nil; Resize.animating = false
+        cleanupOverlay()
+        if state.destroyed or state.closing then return end
+        Resize.apply(portrait.X, portrait.Y); centerRoot()
+        for _, child in hidden do if child.Parent then child.Visible = true end end
+        root.Visible = true
+        panelScale.Scale = k * 0.92
+        backdrop.GroupTransparency = 1
+        open()
+        flushNotifications()
+    end
+    Resize.introFailed = fallback
+    track(function() Resize.introFailed = nil; Resize.intro = nil end)
+
+    Resize.intro = true
+    Resize.animating = true
+    root.Visible = false
+    panelScale.Scale = k
+    backdrop.GroupTransparency = 0
+    Resize.apply(landscape.X, landscape.Y); centerRoot()
+
+    -- quiet detection: loading counts as done once no new UI has appeared for a moment
+    local lastActivity = os.clock()
+    local activity = screenGui.DescendantAdded:Connect(function(item)
+        if not item:IsDescendantOf(overlay) then lastActivity = os.clock() end
+    end)
+    track(activity)
+    local function alive() return not finished and not state.destroyed and not state.closing end
+    local function wait(seconds)
+        local untilAt = os.clock() + seconds
+        while alive() and os.clock() < untilAt do RunService.RenderStepped:Wait() end
+        return alive()
+    end
+
+    task.spawn(function()
+        local ok, err = pcall(function()
+            RunService.RenderStepped:Wait() -- let the landscape size reach Absolute*
+            if not alive() then return end
+            local geo = {center = root.AbsolutePosition + root.AbsoluteSize / 2, land = root.AbsoluteSize,
+                port = portrait * k, panelTL = root.AbsolutePosition}
+            local landed = false
+            if not liquid.introPour(geo, function()
+                -- the window is fully formed: the real (landscape) panel takes over
+                root.Visible = true
+                overlay.Visible = true
+                landed = true
+            end) then fallback(); return end
+            local giveUp = os.clock() + 8
+            while alive() and not landed do
+                if os.clock() > giveUp then fallback(); return end
+                RunService.RenderStepped:Wait()
+            end
+            if not alive() then return end
+
+            -- title, name, ring
+            tween(title, 0.5, {TextTransparency = 0}, Enum.EasingStyle.Sine)
+            if not wait(0.25) then return end
+            tween(nameLabel, 0.5, {TextTransparency = 0}, Enum.EasingStyle.Sine)
+            if not wait(0.25) then return end
+            tween(ringTrack, 0.4, {Transparency = 0.85}); tween(arc, 0.4, {Transparency = 0})
+            local spin = RunService.RenderStepped:Connect(function(dt)
+                arcGradient.Rotation = (arcGradient.Rotation + dt * 400) % 360
+            end)
+            track(spin)
+            -- wait for the script (and Mercury's own start-up work) to finish loading
+            local shownAt = os.clock()
+            local limit = if introOptions.Manual then 30 else 12
+            while alive() do
+                local now = os.clock()
+                local quiet = introOptions.Manual ~= true and now - lastActivity >= 0.4 and Resize.lavaReady == true
+                if now - shownAt >= 0.8 and (introState.loaded or quiet) then break end
+                if now - shownAt >= limit then break end
+                RunService.RenderStepped:Wait()
+            end
+            activity:Disconnect()
+            if not alive() then spin:Disconnect(); return end
+
+            -- fade out, then flow into the portrait window
+            tween(title, 0.45, {TextTransparency = 1}); tween(nameLabel, 0.45, {TextTransparency = 1})
+            tween(ringTrack, 0.45, {Transparency = 1}); tween(arc, 0.45, {Transparency = 1})
+            if not wait(0.5) then spin:Disconnect(); return end
+            spin:Disconnect()
+            overlay.Visible = false
+            local geo2 = {center = root.AbsolutePosition + root.AbsoluteSize / 2, land = root.AbsoluteSize,
+                port = portrait * k, panelTL = root.AbsolutePosition}
+            local done = false
+            if not liquid.introMorph(geo2, function()
+                -- portrait reached: the real window comes back; its glass fades in
+                -- over the liquid while the liquid fades out underneath
+                Resize.apply(portrait.X, portrait.Y); centerRoot()
+                backdrop.GroupTransparency = 1
+                tween(backdrop, 0.3, {GroupTransparency = 0}, Enum.EasingStyle.Sine)
+            end, function() done = true end) then fallback(); return end
+            local giveUp2 = os.clock() + 6
+            while alive() and not done do
+                if os.clock() > giveUp2 then fallback(); return end
+                RunService.RenderStepped:Wait()
+            end
+            if not alive() then return end
+            finished = true
+            liquid.introDone()
+            cleanupOverlay()
+            -- the contents fade in, like after un-minimizing
+            for _, child in hidden do if child.Parent then child.Visible = true end end
+            local entries = collectFade(panel, panelFadeSkip)
+            playFade(entries, true, 0.3)
+            task.delay(0.35, function()
+                if state.destroyed then return end
+                Resize.intro = nil
+                Resize.animating = false
+                refreshCanvasRenders(entries)
+                flushNotifications()
+            end)
+        end)
+        if not ok then warn("[Mercury] intro failed: " .. tostring(err)); fallback() end
+    end)
+end
+task.defer(function() if not state.destroyed then startIntro() end end)
+end
 return window

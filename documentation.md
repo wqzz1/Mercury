@@ -103,8 +103,17 @@ Create a window with `Mercury:CreateWindow(options)`. Each call returns a separa
 | `MinimizeKey` | `Enum.KeyCode` | Keyboard shortcut. Default: `RightShift`. |
 | `MinimizedIcon` | image ID or path | Optional image in the minimized bubble. Omit for the animated logo. |
 | `Performance` | `string` | `"Smooth"`, `"Balanced"`, or `"Low"`. Default: `"Smooth"`. |
+| `Intro` | `boolean` or `table` | Opening animation (see below). Default: on. `false` skips it; `{Manual = true}` keeps the loading ring up until you call `window:FinishLoading()`. |
 
-The window opens centered at its default size. It can be dragged and resized; its minimized bubble can be moved. No position, size, or control value is persisted between runs.
+The window opens with an intro: liquid pours in from the edges of the screen and fills a landscape window, then **Mercury**, the window's `Name` and a loading ring fade in. The ring waits until your script has finished building its UI (no new controls for a moment) and Mercury's own start-up work is done, then everything fades out and the window flows into its normal portrait size. Notifications sent during the intro are shown once the window is up. With `Performance = "Low"`, or when the executor can't draw the liquid, the window simply fades in. If your script loads things that take a while after the UI is built, pass `Intro = {Manual = true}` and call `window:FinishLoading()` when it is ready (the ring gives up after 30 seconds either way).
+
+```lua
+local window = Mercury:CreateWindow({Name = "My Script", Intro = {Manual = true}})
+-- ... build tabs, load data ...
+window:FinishLoading()
+```
+
+After the intro the window sits centered at its default size. It can be dragged and resized; its minimized bubble can be moved. No position, size, or control value is persisted between runs.
 
 Create tabs with `window:CreateTab(name, iconName)` or `window:AddTab(name, iconName)`. Tab names must be nonempty and unique within a window. A built-in `Settings` tab is always last; access it through `window.SettingsTab`. Calling `CreateTab("Settings")` returns that tab. The icon name is optional. Tabs have the existing sliding page transition.
 

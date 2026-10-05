@@ -1238,6 +1238,28 @@ local material=(function()
  end
  -- The panel's own liquid pieces (edge droplets, header bubble) read the same
  -- live sheet: (px,py) is where the panel's top-left corner sits in their image.
+ -- The same sheet at half scale (for the intro's half-resolution pour): every
+ -- strip drawn at 0.5x into one image natively, read back once per new sheet.
+ local half=nil
+ local function halfSheet(ox,oy)
+  local _,mx,my,SW,SH=composeSheet(ox,oy)
+  local front=sheet
+  local hw,hh=math.ceil(SW/2),math.ceil(SH/2)
+  if not half or half.w~=hw or half.h~=hh then
+   if half then half.image:Destroy() end
+   half={w=hw,h=hh,image=newImage(hw,hh),key=nil,pixels=nil}
+  end
+  if half.key~=front or half.time~=front.time then
+   half.key=front;half.time=front.time
+   for _,T in ipairs(front.tiles) do
+    half.image:DrawImageTransformed(Vector2.new((T.x+T.w/2)/2,(T.y+T.h/2)/2),Vector2.new(.5,.5),0,T.image,{CombineType=WRITE})
+   end
+   half.pixels=half.image:ReadPixelsBuffer(Vector2.zero,Vector2.new(hw,hh))
+  end
+  return half.pixels,floor(mx/2),floor(my/2),hw,hh
+ end
+ m.introHalf=false
+ function m.releaseHalf() if half then half.image:Destroy();half=nil end end
  function m.sheetAt(px,py)
   if not assets then return nil end
   return composeSheet(px,py)
@@ -1298,7 +1320,8 @@ local material=(function()
  end
  function m.compose(x0,y0,x1,y1)
   if not assets or not current then return nil end
-  if state=='morph' then return composeSheet(m.ox,m.oy) end
+  if state=='intro' and m.introHalf then return halfSheet(m.ox,m.oy) end
+  if state=='morph' or state=='intro' then return composeSheet(m.ox,m.oy) end
   if state=='bubble' then return composeBubble() end
   compose(current.tiles,m.ox,m.oy,x0,y0,x1,y1,current.pixels,OW,true,false)
   return current.pixels,0,0,OW,OH
@@ -1346,7 +1369,8 @@ local material=(function()
   -- to it. B-spline rather than Catmull-Rom: Catmull-Rom passes through every
   -- source texel and overshoots, so the tile's speckle survived as dotted halos
   -- along the strands; the B-spline is C2-smooth with no ringing.
-  if not texture then return end
+  -- (Resize.lavaReady: the intro's loading ring waits for this start-up work)
+  if not texture then Resize.lavaReady=true;return end
   local ok2,err2=pcall(function()
    local F=3
    local src=texture.Size.X;local tile=src//2           -- stored 2x2
@@ -1403,6 +1427,7 @@ local material=(function()
    task.delay(1,function() old:Destroy() end)
   end)
   if not ok2 then warn('[LiquidMaterial] smooth lava unavailable',err2) end
+  Resize.lavaReady=true
  end)
  function m.destroy()
   for key in pairs(regions) do m.releaseRegion(key) end
@@ -1509,9 +1534,18 @@ end
 -- covering the column with the blur's full reach). Those cells are pre-filled
 -- with 1 and the passes jump over them.
 local colTop,colBot,rowInL,rowInR={},{},{},{}
-local function verticalPass(src,dst,left,right,top,bottom)
+-- per column, the first and last cell row the horizontal pass wrote anything
+-- to: each vertical pass only walks that range (grown by its blur reach), and
+-- columns with nothing in them are skipped. A sparse picture (the intro's
+-- streams across a full-screen canvas) costs what its liquid covers, not the box.
+local colMin,colMax={},{}
+local function verticalPass(src,dst,left,right,top,bottom,reach)
+ local fullTop,fullBottom=top,bottom
  for x=left,right do
   if (x-left)%24==23 then pace() end
+  local lo=colMin[x]
+  if not lo then continue end
+  top=max(fullTop,lo-reach);bottom=min(fullBottom,colMax[x]+reach)
   local dt,db=colTop[x],colBot[x]
   local sum=0;for y=top,min(bottom,top+BR-1) do sum+=src[y*W+x+1] end
   local y=top
@@ -1650,10 +1684,14 @@ local function shadeCells(iy,ix,endX,mat,phase)
   ix+=1
  end
 end
-local function render(points,drops)
+-- polys (optional): extra outlines, each filled on its own (even-odd) and then
+-- UNIONED with the rest like droplets, so they can overlap the body or each
+-- other. One span per row instead of one per disc: the intro's streams.
+local function render(points,drops,polys)
  move(zeros,1,W*H,1,mask);move(zeros,1,W*H,1,temp)
  local left,top,right,bottom=W-1,H-1,0,0
  for _,p in ipairs(points) do left=min(left,p[1]/S);right=max(right,p[1]/S);top=min(top,p[2]/S);bottom=max(bottom,p[2]/S) end
+ if polys then for _,poly in ipairs(polys) do for _,p in ipairs(poly) do left=min(left,p[1]/S);right=max(right,p[1]/S);top=min(top,p[2]/S);bottom=max(bottom,p[2]/S) end end end
  for _,d in ipairs(drops) do left=min(left,(d[1]-d[3])/S);right=max(right,(d[1]+d[3])/S);top=min(top,(d[2]-d[3])/S);bottom=max(bottom,(d[2]+d[3])/S) end
  left=max(0,floor(left)-KS-3);right=min(W-1,ceil(right)+KS+3);top=max(0,floor(top)-KS-3);bottom=min(H-1,ceil(bottom)+KS+3)
  table.clear(rowSpans);table.clear(rowSub)
@@ -1692,12 +1730,33 @@ local function render(points,drops)
  for _,d in ipairs(drops) do local x0,y0,r=d[1]/S,d[2]/S,d[3]/S
   for y=max(0,floor(y0-r)),min(H-1,ceil(y0+r)) do local dy=y+.5-y0;local rr=r*r-dy*dy;if rr>0 then local dx=sqrt(rr);addSpan(y,x0-dx,x0+dx) end end
  end
+ if polys then
+  for _,poly in ipairs(polys) do
+   local cuts={};local n=#poly
+   for i=1,n do
+    local p,q=poly[i],poly[i%n+1]
+    if p[2]~=q[2] then
+     local y0=max(0,ceil(min(p[2],q[2])/S-.5));local y1=min(H-1,ceil(max(p[2],q[2])/S-.5)-1)
+     local slope=(q[1]-p[1])/(q[2]-p[2])
+     for y=y0,y1 do local c=cuts[y];if not c then c={};cuts[y]=c end;c[#c+1]=(p[1]+((y+.5)*S-p[2])*slope)/S end
+    end
+   end
+   for y,c in pairs(cuts) do sort(c);for i=1,#c-1,2 do addSpan(y,c[i],c[i+1]) end end
+  end
+ end
  -- Horizontal blur, solved per row from the span edges: interiors are filled
  -- natively and only the 19 cells around each edge are evaluated.
  local rowsDone=0
+ table.clear(colMin);table.clear(colMax)
  for y,list in pairs(rowSpans) do
   rowsDone+=1;if rowsDone%24==0 then pace() end
   mergeRow(list)
+  for i=1,#list,2 do
+   for x=max(left,floor(list[i]-KS-1)),min(right,ceil(list[i+1]+KS)) do
+    local a=colMin[x];if not a or y<a then colMin[x]=y end
+    local b=colMax[x];if not b or y>b then colMax[x]=y end
+   end
+  end
   local row=y*W+1
   local sub=rowSub[y]
   if sub then
@@ -1759,9 +1818,9 @@ local function render(points,drops)
  end
  pace()
  -- Vertical blur: three box passes, ending in mask.
- verticalPass(temp,mask,left,right,top,bottom);pace()
- verticalPass(mask,temp,left,right,top,bottom);pace()
- verticalPass(temp,mask,left,right,top,bottom);pace()
+ verticalPass(temp,mask,left,right,top,bottom,BR+1);pace()
+ verticalPass(mask,temp,left,right,top,bottom,2*BR+2);pace()
+ verticalPass(temp,mask,left,right,top,bottom,3*BR+3);pace()
  local mat=nil
  if not rimMode and material.compose then mat,matX,matY,matW,matH=material.compose(max(0,(left-1)*S),max(0,(top-1)*S),min(OW,(right+2)*S),min(OH,(bottom+2)*S)) end
  pace()
@@ -2149,6 +2208,7 @@ local function finish(minimized)
  end
 end
 function api.start(minimized,instant)
+ if state=='intro' or state=='intro_hold' then return end
  if state=='morph' or contentFadingIn then pending=minimized;return end
  if api.pauseField then api.pauseField() end
  if instant or PERF.instant then
@@ -2183,6 +2243,283 @@ function api.start(minimized,instant)
   flow.hideIn=2
  end
  step(lead,true);pacing.onDone=reveal
+end
+-- Intro -----------------------------------------------------------------------
+-- The window's first appearance, driven by the same renderer as the minimize
+-- morph (state 'intro', so neither the morph code nor the panel's own liquid
+-- pieces run meanwhile):
+--   introPour:  liquid streams pour in from every screen edge, stretch to the
+--               middle and fill the landscape window, which then takes over.
+--   introMorph: the landscape window turns to liquid, ripples into the portrait
+--               window, and the real panel fades back in over it.
+-- The caller (api.lua) owns everything between the two: the title, the window
+-- name, the loading ring and the wait for the script to finish loading.
+local introFrame
+do -- scoped: the renderer's function is close to Luau's 200-local limit
+local intro=nil
+local INTRO_POUR=2.3     -- s, streams in + the body settling into the window
+local INTRO_MORPH=1.25   -- s, landscape -> portrait
+local function introClear()
+ if not intro then return end
+ pacing.task=nil;pacing.onDone=nil
+ canvas.Visible=false
+ if shownTiles then for _,tile in ipairs(shownTiles) do tile.label.ImageTransparency=0;tile.label.Visible=false;tile.underLabel.Visible=false end end
+ -- the full-screen surface is large: give its images back right away
+ releaseImages();shownTiles=nil;flow.retire=nil;flow.fadeLen=0;flow.fading=false
+ material.introHalf=false;material.releaseHalf()
+ restoreBackgrounds()
+ intro=nil
+ if state=='intro' then state='panel' end
+end
+-- rounded rect (screen px around the centre) inset by the liquid's contour
+-- offset, with travelling waves of amplitude `amp` along its outward direction
+local function introOutline(ox,oy,ccx,ccy,w,h,amp,t)
+ local o=contourOut
+ local x,y=ccx-w/2+o-ox,ccy-h/2+o-oy
+ w,h=max(2,w-2*o),max(2,h-2*o)
+ local r=max(1,min(Layout.radius*Layout.uiScale-o,w/2,h/2))
+ local sw,sh=w-2*r,h-2*r;local arc=pi*r/2;local L=2*sw+2*sh+4*arc
+ local seg={{sw/2,x+w/2,y,1,0},{arc,x+w-r,y+r,-pi/2},{sh,x+w,y+r,0,1},{arc,x+w-r,y+h-r,0},{sw,x+w-r,y+h,-1,0},{arc,x+r,y+h-r,pi/2},{sh,x,y+h-r,0,-1},{arc,x+r,y+r,pi},{sw/2,x+r,y,1,0}}
+ local mx,my=ccx-ox,ccy-oy
+ local pts={}
+ for i=1,N do
+  local s=(i-1)/N;local d=s*L;local px,py=x+w/2,y
+  for _,v in ipairs(seg) do
+   if d<=v[1] then if #v==5 then px,py=v[2]+v[4]*d,v[3]+v[5]*d else local a=v[4]+d/r;px,py=v[2]+cos(a)*r,v[3]+sin(a)*r end;break end
+   d-=v[1]
+  end
+  if amp>0 then
+   local a=s*2*pi
+   local wv=sin(3*a+t*2.3)*.55+sin(5*a-t*3.1+1.3)*.3+sin(2*a+t*1.4+2.1)*.35
+   local dx,dy=px-mx,py-my;local len=math.sqrt(dx*dx+dy*dy)
+   if len>0 then px+=dx/len*wv*amp;py+=dy/len*wv*amp end
+  end
+  pts[i]={px,py}
+ end
+ return pts
+end
+local function introSpring(x) if x<=0 then return 0 end;return 1-math.exp(-5.5*x)*cos(8.5*x) end
+local function introSmooth(x) x=clamp(x,0,1);return x*x*(3-2*x) end
+local function introRamp(t,a,b) return clamp((t-a)/(b-a),0,1) end
+-- one picture of the pour at time t (pts outline + drops), canvas space
+local function introPourShape(t)
+ local I=intro;local k=Layout.uiScale
+ local final=t>=INTRO_POUR
+ local g=final and 1 or clamp(introSpring(t-.75),0,1.08)
+ local amp=final and 0 or 10*k*math.exp(-1.8*max(0,t-.75))*introRamp(t,.75,1.1)
+ local w,h=I.land.X*g,I.land.Y*g
+ local pts=nil
+ if w>4 and h>4 then pts=introOutline(I.origin.X,I.origin.Y,I.center.X,I.center.Y,w,h,amp,clock) end
+ local drops,polys={},nil
+ if not final then
+  -- each stream: a chain of discs whose head runs from past the screen edge to
+  -- near the middle while its tail stays on the edge (stretching thin), then
+  -- lets go and is drawn in after the head
+  local SW,SH=I.screen.X,I.screen.Y
+  local cxp,cyp=I.center.X-I.origin.X,I.center.Y-I.origin.Y
+  polys={}
+  for _,s in ipairs(I.streams) do
+   local head=1-(1-introRamp(t,s.s0,s.s0+s.run))^4
+   local tail=introSmooth(introRamp(t,s.s0+s.run*.4,s.s0+s.run+.45))
+   if head>0 and tail<.999 then
+    local dx,dy=s.dx,s.dy
+    local tx=dx~=0 and (dx>0 and (SW-cxp)/dx or -cxp/dx) or 1e9
+    local ty=dy~=0 and (dy>0 and (SH-cyp)/dy or -cyp/dy) or 1e9
+    local edge=min(tx,ty)+40*k
+    local dHead=edge+(edge*s.stop-edge)*head
+    local dTail=edge+(edge*s.stop-edge)*tail
+    local span=max(1,dTail-dHead)  -- the head is nearer the middle than the tail
+    local stretchThin=1-.4*min(1,span/(edge*.8))
+    -- the stream's outline: its centre line from tail to head, offset each side
+    -- by a radius that is full at the head and thins along the neck (and
+    -- thickens again while the tail is drawn in), with round caps
+    local M=18
+    local px_,py_,rr={},{},{}
+    for j=0,M do
+     local u=j/M                                      -- 0 at the tail, 1 at the head
+     local dist=dTail-span*u
+     local along=1-dist/edge
+     local sway=sin(s.phase+clock*3+u*4)*10*k*(1-head*.6)+s.curl*90*k*sin(pi*along)
+     px_[j]=cxp+dx*dist-dy*sway;py_[j]=cyp+dy*dist+dx*sway
+     rr[j]=s.thick*k*(.42+.58*u^1.5)*(.72+.28*stretchThin)*(1-.35*tail)
+    end
+    local nxs,nys={},{}
+    for j=0,M do
+     local tx_,ty_=px_[min(M,j+1)]-px_[max(0,j-1)],py_[min(M,j+1)]-py_[max(0,j-1)]
+     local len=math.sqrt(tx_*tx_+ty_*ty_)
+     if len<1e-6 then tx_,ty_=-dx,-dy else tx_,ty_=tx_/len,ty_/len end
+     nxs[j],nys[j]=-ty_,tx_
+    end
+    local poly={}
+    for j=0,M do poly[#poly+1]={px_[j]+nxs[j]*rr[j],py_[j]+nys[j]*rr[j]} end
+    do -- head cap: half circle from the left side round the front to the right
+     local base=math.atan2(nys[M],nxs[M])
+     for i=1,9 do local a=base-pi*i/10;poly[#poly+1]={px_[M]+cos(a)*rr[M],py_[M]+sin(a)*rr[M]} end
+    end
+    for j=M,0,-1 do poly[#poly+1]={px_[j]-nxs[j]*rr[j],py_[j]-nys[j]*rr[j]} end
+    do -- tail cap
+     local base=math.atan2(-nys[0],-nxs[0])
+     for i=1,7 do local a=base-pi*i/8;poly[#poly+1]={px_[0]+cos(a)*rr[0],py_[0]+sin(a)*rr[0]} end
+    end
+    polys[#polys+1]=poly
+   end
+  end
+ end
+ return pts,drops,final,polys
+end
+local function introMorphShape(t)
+ local I=intro;local k=Layout.uiScale
+ local x=clamp(t/INTRO_MORPH,0,1)
+ local final=x>=1
+ local m=introSmooth(x*1.08)
+ local over=final and 0 or sin(pi*x)*.035
+ local w=(I.land.X+(I.port.X-I.land.X)*m)*(1-over)
+ local h=(I.land.Y+(I.port.Y-I.land.Y)*m)*(1+over)
+ local amp=final and 0 or 16*k*sin(pi*x)
+ return introOutline(I.origin.X,I.origin.Y,I.center.X,I.center.Y,w,h,amp,clock),{},final
+end
+-- queue the next picture (paced over frames like the morph's)
+local function introQueue(shape)
+ local I=intro
+ local lead=min(.06,flow.latency)
+ local pts,drops,final,polys=shape(I.t+lead)
+ if not pts and #drops==0 and not (polys and #polys>0) then return end
+ if not pts then pts={} end
+ if I.half and not (polys and #polys>0) and I.shown then
+  -- the streams are in: the rest (the body settling into the window) draws at
+  -- full resolution on a canvas around the window only
+  I.half=false;material.introHalf=false
+  local pad=ceil(140*Layout.uiScale)
+  local hw,hh=I.land.X*.56+pad,I.land.Y*.56+pad
+  local low=Vector2.new(floor(I.center.X-hw),floor(I.center.Y-hh))
+  I.origin=low
+  allocate(low,Vector2.new(ceil(hw*2),ceil(hh*2)))
+  I.needShow=true
+  pts,drops,final,polys=shape(I.t+lead)
+  if not pts then pts={} end
+ end
+ if I.half then
+  -- half resolution: the canvas is scaled 2x on screen
+  local function halve(list) for _,p in ipairs(list) do p[1]*=.5;p[2]*=.5 end end
+  halve(pts)
+  if polys then for _,poly in ipairs(polys) do halve(poly) end end
+  for _,d in ipairs(drops) do d[1]*=.5;d[2]*=.5;d[3]*=.5 end
+ end
+ material.prepare(material.panelSize())
+ material.ox,material.oy=I.panelTL.X-I.origin.X,I.panelTL.Y-I.origin.Y
+ flow.shot={0,0,0,0,os.clock(),os.clock()}
+ pacing.task=coroutine.create(render);pacing.args={pts,drops,polys};pacing.work=0;pacing.rim=rimByProgress[0]
+ local needShow=I.needShow;I.needShow=nil
+ pacing.onDone=function()
+  if needShow and intro then showSurface() end
+  if not intro then return end
+  if not I.shown then I.shown=true;showSurface();canvas.Visible=true;I.shownAt=os.clock() end
+  if final then I.finalDrawn=true end
+ end
+end
+-- per-frame driver, called from the RenderStepped handler while state=='intro'
+introFrame=function(dt)
+ local I=intro;if not I then return end
+ if I.phase=='pour' or I.phase=='morph' then
+  if I.phase=='morph' and I.shown and not I.backHidden and os.clock()-I.shownAt>.05 then I.backHidden=true;hideBackgrounds() end
+  -- the clock holds while the first picture is being drawn, so nothing is
+  -- skipped (before anything is visible at all it just runs)
+  if I.shown or not pacing.task then I.t+=dt end
+  local sheetTask=material.sheetTask
+  if sheetTask then
+   pacing.budget=.003;pacing.start=os.clock()
+   local good,problem=coroutine.resume(sheetTask)
+   pacing.budget=nil
+   if not good then material.sheetTask=nil;warn('[LiquidMaterial]',problem)
+   elseif coroutine.status(sheetTask)=='dead' and material.sheetTask==sheetTask then material.sheetTask=nil end
+  end
+  if pacing.task then resumeRender()
+  elseif not I.finalDrawn then introQueue(I.phase=='pour' and introPourShape or introMorphShape);if pacing.task then resumeRender() end end
+  blend(os.clock())
+  if I.finalDrawn and not pacing.task and I.t>=(I.phase=='pour' and INTRO_POUR or INTRO_MORPH) then
+   local done=I.onDone;I.phase='handoff';I.onDone=nil
+   if done then done() end
+  end
+ elseif I.phase=='fadeout' then
+  local a=clamp((os.clock()-I.fadeStart)/I.fadeLen,0,1)
+  -- hold: the panel's glass is fading in ABOVE the liquid; fading both at once
+  -- left the window see-through for a moment, so the liquid stays solid
+  if I.hold then a=a>=1 and 1 or 0 end
+  if shownTiles then for _,tile in ipairs(shownTiles) do tile.label.ImageTransparency=a;tile.underLabel.Visible=false end end
+  if a>=1 then local after=I.afterFade;introClear();if after then after() end end
+ end
+end
+-- Fade the liquid out (the real panel is already showing over/under it), then
+-- release the surfaces and go back to the panel state.
+local function introFadeOut(seconds,after,hold)
+ local I=intro;if not I then if after then after() end;return end
+ I.phase='fadeout';I.fadeStart=os.clock();I.fadeLen=seconds;I.afterFade=after;I.hold=hold
+end
+-- geometry: everything in absolute screen pixels
+--   center: the windows' shared centre; land/port: window sizes in px (scaled)
+--   panelTL: where the panel's top-left is (for the marble)
+function api.introPour(geo,onLanded)
+ if stopped or state~='panel' then return false end
+ local sg=screenGui.AbsolutePosition;local size=screenGui.AbsoluteSize
+ intro={phase='pour',t=0,center=geo.center,land=geo.land,port=geo.port,panelTL=geo.panelTL,screen=size,origin=sg,streams={},onDone=nil}
+ -- seven streams around the screen, each bending and timed a little
+ -- differently (their outline length is what a picture costs to shade)
+ local seed=Random.new()
+ local COUNT=7
+ local turn=seed:NextNumber(0,2*pi)
+ for i=1,COUNT do
+  local a=turn+(i-1)/COUNT*2*pi+seed:NextNumber(-.25,.25)
+  intro.streams[i]={dx=cos(a),dy=sin(a),s0=seed:NextNumber(.02,.3),run=seed:NextNumber(1.0,1.2),stop=seed:NextNumber(.1,.2),thick=seed:NextNumber(40,60),curl=seed:NextNumber(-.45,.45),phase=seed:NextNumber(0,2*pi)}
+ end
+ material.prepare(material.panelSize())
+ state='intro';Resize.animating=true
+ material.sheetTask=nil
+ -- the pour spans the whole screen: draw it at half resolution, shown at 2x
+ -- (a full-screen picture is mostly edge shading, which costs per pixel)
+ intro.half=true;material.introHalf=true
+ allocate(sg,Vector2.new(ceil(size.X/2),ceil(size.Y/2)))
+ local holder=holderOf[tiles]
+ if holder and not holder:FindFirstChild('HalfScale') then create('UIScale',{Name='HalfScale',Scale=2,Parent=holder}) end
+ resetFlow()
+ intro.onDone=function()
+  -- the window is fully formed: the caller shows the real panel above the
+  -- liquid (Root draws over it), then the liquid fades away underneath
+  if onLanded then onLanded() end
+  introFadeOut(.2,function() state='intro_hold' end)
+ end
+ return true
+end
+function api.introMorph(geo,onFormed,onDone)
+ if stopped then return false end
+ local sg=screenGui.AbsolutePosition
+ local pad=ceil(160*Layout.uiScale)
+ local half=Vector2.new(max(geo.land.X,geo.port.X),max(geo.land.Y,geo.port.Y))/2*1.08
+ local low=Vector2.new(floor(geo.center.X-half.X-pad),floor(geo.center.Y-half.Y-pad))
+ local high=Vector2.new(ceil(geo.center.X+half.X+pad),ceil(geo.center.Y+half.Y+pad))
+ intro={phase='morph',t=0,center=geo.center,land=geo.land,port=geo.port,panelTL=geo.panelTL,screen=screenGui.AbsoluteSize,origin=low,streams={},onDone=nil}
+ state='intro';Resize.animating=true
+ material.sheetTask=nil
+ allocate(low,high-low)
+ resetFlow()
+ intro.onDone=function()
+  -- portrait reached: the caller brings the real panel back (its backdrop
+  -- fades in over the liquid), then the liquid fades out underneath
+  restoreBackgrounds()
+  if onFormed then onFormed() end
+  introFadeOut(.34,function() if onDone then onDone() end end,true)
+ end
+ return true
+end
+function api.introAbort()
+ if intro or state=='intro' or state=='intro_hold' then
+  introClear()
+  state='panel';Resize.animating=false
+ end
+end
+function api.introDone()
+ if state=='intro_hold' or state=='intro' then introClear();state='panel' end
+ Resize.animating=false
+end
 end
 api.shared={pacing=pacing,material=material}
 function api.stats() return {mode=state,material=material,width=P.w,height=P.h,canvasWidth=OW,canvasHeight=OH,frames=count,meanMs=totalMs/max(1,count),maxMs=maximumMs} end
@@ -2259,13 +2596,15 @@ end
 resumeRender=function()
  local task=pacing.task
  pacing.resumedAt=os.clock()
- pacing.budget=sliceBudget(state=='morph' and PERF.morph or PERF.idle);pacing.start=pacing.frameStart
+ pacing.budget=sliceBudget((state=='morph' or state=='intro') and PERF.morph or PERF.idle);pacing.start=pacing.frameStart
+ -- the intro takes a bigger slice: nothing else competes while it plays
+ if state=='intro' then pacing.budget=max(pacing.budget,PERF.morph*1.8) end
  -- the first minimize picture gets the full morph slice even when the game is
  -- busy, so the liquid takes over as soon as possible
  if state=='morph' and not flow.revealed and morph and morph.dir==1 then pacing.budget=max(pacing.budget,PERF.morph) end
  local ok,err
  local savedRim=rimLookup;rimLookup=pacing.rim or rimWide
- if pacing.args then local args=pacing.args;pacing.args=nil;ok,err=coroutine.resume(task,args[1],args[2]) else ok,err=coroutine.resume(task) end
+ if pacing.args then local args=pacing.args;pacing.args=nil;ok,err=coroutine.resume(task,args[1],args[2],args[3]) else ok,err=coroutine.resume(task) end
  rimLookup=savedRim
  local sliceStart=pacing.start
  pacing.budget=nil;pacing.work+=os.clock()-max(sliceStart,pacing.resumedAt or sliceStart)
@@ -2283,7 +2622,7 @@ resumeRender=function()
     flow.doneAt=now;flow.fadeStart=now
     -- A long overlap leaves the previous displaced outline visible.
     -- a bubble that redraws every frame needs no crossfade (it would only trail)
-    flow.fadeLen=state=='morph' and clamp(flow.interval*.45,.008,.024) or (flow.interval<.014 and 0 or clamp(flow.interval*.7,.01,.035))
+    flow.fadeLen=(state=='morph' or state=='intro') and clamp(flow.interval*.45,.008,.024) or (flow.interval<.014 and 0 or clamp(flow.interval*.7,.01,.035))
     flow.fading=true
   end
   if pacing.onDone then local done=pacing.onDone;pacing.onDone=nil;done() end
@@ -2295,6 +2634,16 @@ track(RunService.RenderStepped:Connect(function(dt)
  pacing.frameStart=os.clock()
  -- the game's own frame time: this frame's length minus what the liquid used in it
  flow.gameTime=flow.gameTime*.9+clamp(dt-flow.ourWork,0,.1)*.1;flow.ourWork=0
+ if state=='intro' or state=='intro_hold' then
+  local ok,err=xpcall(introFrame,debug.traceback,dt)
+  if not ok then
+   warn('[LiquidIntro]',err)
+   api.introAbort()
+   if Resize.introFailed then task.spawn(Resize.introFailed) end
+  end
+  flow.ourWork=os.clock()-pacing.frameStart
+  return
+ end
  if state=='panel' then
   pacing.task=nil
   if flow.retire then retireNow() end
@@ -4429,7 +4778,7 @@ end) if not fieldOk then warn('[LiquidField] disabled',fieldError) end end
 Resize.liquidToast=liquidField and liquidField.toast or nil
 
         function Resize.setMinimized(minimized: boolean, instant: boolean?)
-            if state.closing then return end
+            if state.closing or Resize.intro then return end
             if Resize.animating then liquid.start(minimized,instant);return end
             if Resize.minimized == minimized then return end
             local ok,err=pcall(liquid.start,minimized,instant)

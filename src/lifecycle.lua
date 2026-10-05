@@ -98,6 +98,9 @@ local function close()
         return
     end
     state.closing = true
+    -- closing mid-intro (the X, or another Mercury script taking over): drop the
+    -- intro's liquid at once; the intro thread sees state.closing and stops
+    if Resize.intro and Resize.liquid then pcall(Resize.liquid.introAbort) end
     tween(panelScale, 0.22, { Scale = Layout.uiScale * 0.88 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
     tween(backdrop, 0.2, { GroupTransparency = 1 })
     playFade(collectFade(panel, panelFadeSkip), false, 0.2)
