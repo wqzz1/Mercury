@@ -112,6 +112,23 @@ local function liquidDisclosure(host, opts)
     local render = Resize.createDisclosure and Resize.createDisclosure(host, opts.inset, opts.zIndex, opts.persistent)
     local activeTween = nil
     local function smooth(t) t = math.clamp(t, 0, 1); return t * t * (3 - 2 * t) end
+    -- opts.glass: the open card gets the same glass as the buttons (faint mist
+    -- fill, moving water, top sheen) under the liquid rim. It fades in with the
+    -- contents, once the drop has spread into its card shape.
+    local glass = nil
+    if opts.glass then
+        glass = create("CanvasGroup", {Name = "Glass", BackgroundTransparency = 1, GroupTransparency = 1,
+            Position = UDim2.fromOffset(opts.inset, opts.top), Size = UDim2.new(1, -opts.inset * 2, 0, 0),
+            Visible = false, ZIndex = opts.zIndex - 1, Parent = host})
+        passThrough(glass)
+        corner(glass, 12)
+        local face = create("Frame", {Name = "Face", BackgroundColor3 = Theme.mist, BackgroundTransparency = 0.94,
+            BorderSizePixel = 0, Size = UDim2.fromScale(1, 1), ZIndex = opts.zIndex - 1, Parent = glass})
+        passThrough(face)
+        corner(face, 12)
+        liquidWave(face, Layout.width - opts.inset * 2, math.max(40, opts.height()), 12, opts.zIndex - 1)
+        sheen(face, 12, opts.zIndex - 1)
+    end
     local function draw()
         if not host.Parent then return end
         local p = math.clamp(value.Value, 0, 1)
@@ -120,6 +137,12 @@ local function liquidDisclosure(host, opts)
         if not render then reveal = fill end
         local full = opts.height()
         opts.paint(fill, reveal, p > 0 and p < 1, full)
+        if glass then
+            glass.Visible = reveal > 0
+            -- half strength: over a card this size the full button glass read too bright
+            glass.GroupTransparency = 1 - reveal * 0.5
+            glass.Size = UDim2.new(1, -opts.inset * 2, 0, full)
+        end
         if render then render(p, opts.top, full, opts.gap or 0) end
     end
     track(value:GetPropertyChangedSignal("Value"):Connect(draw))
@@ -333,7 +356,7 @@ local function addDropdown(container, config)
         return if n > 0 then LIST_PAD * 2 + n * OPTION_H + (n - 1) * OPTION_GAP else 0
     end
     local animate, redraw = liquidDisclosure(frame, {inset = Layout.padX, zIndex = 10, top = listTop, gap = DISCLOSURE_GAP,
-        persistent = true, height = listHeight,
+        persistent = true, glass = true, height = listHeight,
         paint = function(fill, reveal, active, full)
             list.Visible = (active or obj.Open) and reveal > 0
             list.GroupTransparency = 1 - reveal
@@ -740,7 +763,7 @@ local function addColorPicker(container, config)
     obj.Transparency = math.clamp(initialTransparency, 0, 1)
     obj.Open = false
     local animate = liquidDisclosure(frame, {inset = Layout.padX, zIndex = 3, top = bodyTop, gap = DISCLOSURE_GAP,
-        persistent = true, height = function() return bodyHeight end,
+        persistent = true, glass = true, height = function() return bodyHeight end,
         paint = function(fill, reveal, active, full)
             bodyGroup.Visible = (active or obj.Open) and reveal > 0
             bodyGroup.GroupTransparency = 1 - reveal

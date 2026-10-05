@@ -547,7 +547,9 @@ local function attachHoverScale(trigger: GuiObject, target: GuiObject?)
             -- a 28px circle to under half its size, so cap it at -12%
             return math.max(1 + pixels / width, 0.88)
         end
-        return 1 + pixels / width
+        -- small pills (footer Biolink, ~80px): the fixed pixel amount is a big
+        -- fraction of them, so never settle or press below 94% / 91%
+        return math.max(1 + pixels / width, if pixels > -16 then 0.94 else 0.91)
     end
 
     track(trigger.MouseEnter:Connect(function()
