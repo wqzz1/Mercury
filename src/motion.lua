@@ -2048,7 +2048,10 @@ local function allocate(position,size)
   if flow.retire and flow.retire.tiles==old.tiles then flow.retire=nil end
  end
  tiles={}
- local holder=create('Frame',{Name='LiquidHolder',BackgroundTransparency=1,Size=UDim2.fromOffset(OW,OH),ZIndex=0,Visible=false,Parent=canvas})
+ -- placed right away: a holder left at (0,0) until its first showSurface was
+ -- seen for one frame as a ghost copy of the liquid in the top-left corner
+ local holder=create('Frame',{Name='LiquidHolder',BackgroundTransparency=1,Size=UDim2.fromOffset(OW,OH),
+  Position=UDim2.fromOffset(origin.X-screenGui.AbsolutePosition.X,origin.Y-screenGui.AbsolutePosition.Y),ZIndex=0,Visible=false,Parent=canvas})
  passThrough(holder);holderOf[tiles]=holder
  mask=table.create(W*H,0);temp=table.create(W*H,0);zeros=table.create(W*H,0);ones=table.create(W,1);pixels=buffer.create(OW*OH*4)
  for x=0,OW-1 do phaseX[x]=floor(x*.008*phaseScale) end
@@ -2420,6 +2423,8 @@ end
 -- per-frame driver, called from the RenderStepped handler while state=='intro'
 introFrame=function(dt)
  local I=intro;if not I then return end
+ -- the previous surface stays under a new one for two frames, then goes
+ if flow.retire then flow.retire.frames-=1;if flow.retire.frames<=0 then retireNow() end end
  if I.phase=='pour' or I.phase=='morph' then
   if I.phase=='morph' and I.shown and not I.backHidden and os.clock()-I.shownAt>.05 then I.backHidden=true;hideBackgrounds() end
   -- the clock holds while the first picture is being drawn, so nothing is
